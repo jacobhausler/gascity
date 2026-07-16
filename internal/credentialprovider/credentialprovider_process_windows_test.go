@@ -38,14 +38,19 @@ func TestCredentialProviderWindowsJobKillsDescendants(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
 		_, mintErr := provider.Mint(ctx, validCredentialRequest())
 		done <- mintErr
 	}()
 
-	pid := waitForWindowsPIDFile(t, pidPath)
+	pid := waitForWindowsPIDFile(t, pidPath, done, func(mintErr error) string {
+		if mintErr == nil {
+			return "Mint completed successfully"
+		}
+		return fmt.Sprintf("Mint returned error: %v", mintErr)
+	})
 	process, err := windows.OpenProcess(
 		windows.SYNCHRONIZE|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION,
 		false,
@@ -97,24 +102,50 @@ func TestCredentialProviderWindowsJobCloseKillsDescendantsAfterParentExit(t *tes
 		`[Console]::Out.Flush()`,
 		`exit 0`,
 	}, "; ")
-	done := make(chan struct {
+	type commandResult struct {
 		output commandOutput
 		err    error
-	}, 1)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	done := make(chan commandResult, 1)
 	go func() {
 		output, runErr := runCommand(
-			context.Background(),
+			ctx,
 			[]string{"powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script},
 			nil,
 			minimalEnvironment(os.Environ()),
 		)
-		done <- struct {
-			output commandOutput
-			err    error
-		}{output: output, err: runErr}
+		done <- commandResult{output: output, err: runErr}
 	}()
 
-	pid := waitForWindowsPIDFile(t, pidPath)
+	pid := waitForWindowsPIDFile(t, pidPath, done, func(result commandResult) string {
+		class := "startup-or-control failure"
+		switch {
+		case result.err == nil:
+			class = "success"
+		case errors.Is(result.err, context.Canceled):
+			class = "canceled"
+		case errors.Is(result.err, context.DeadlineExceeded):
+			class = "deadline"
+		case errors.Is(result.err, exec.ErrWaitDelay):
+			class = "pipe wait deadline"
+		default:
+			var exitErr *exec.ExitError
+			if errors.As(result.err, &exitErr) {
+				class = "process exit failure"
+			}
+		}
+		return fmt.Sprintf(
+			"class=%s err=%v stdout_bytes=%d stderr_bytes=%d stdout_overflow=%t stderr_overflow=%t",
+			class,
+			result.err,
+			len(result.output.stdout),
+			len(result.output.stderr),
+			result.output.stdoutOverflow,
+			result.output.stderrOverflow,
+		)
+	})
 	process, err := windows.OpenProcess(
 		windows.SYNCHRONIZE|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION,
 		false,
@@ -151,11 +182,12 @@ func TestCredentialProviderWindowsJobCloseKillsDescendantsAfterParentExit(t *tes
 	}
 }
 
-func waitForWindowsPIDFile(t *testing.T, path string) int {
+func waitForWindowsPIDFile[T any](t *testing.T, path string, done <-chan T, describe func(T) string) int {
 	t.Helper()
 	ticker := time.NewTicker(10 * time.Millisecond)
 	defer ticker.Stop()
-	deadline := time.After(testutil.ExecRaceTimeout)
+	deadline := time.NewTimer(testutil.ExecRaceTimeout + commandWaitDelay + commandKillGrace)
+	defer deadline.Stop()
 	for {
 		raw, err := os.ReadFile(path)
 		if err == nil {
@@ -169,8 +201,15 @@ func waitForWindowsPIDFile(t *testing.T, path string) int {
 			t.Fatalf("read descendant pid: %v", err)
 		}
 		select {
+		case result := <-done:
+			t.Fatalf("operation completed before descendant pid file %s: %s", path, describe(result))
 		case <-ticker.C:
-		case <-deadline:
+		case <-deadline.C:
+			select {
+			case result := <-done:
+				t.Fatalf("operation completed before descendant pid file %s: %s", path, describe(result))
+			default:
+			}
 			t.Fatalf("timed out waiting for descendant pid file %s", path)
 		}
 	}
