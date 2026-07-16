@@ -78,6 +78,16 @@ func (p *Provider) runWithContext(parent context.Context, dur time.Duration, std
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, p.script, args...)
+	// Give cooperative adapters a chance to roll back before cancellation
+	// becomes a forced kill. Platforms that do not support os.Interrupt (such
+	// as Windows) fall back to Kill.
+	cmd.Cancel = func() error {
+		err := cmd.Process.Signal(os.Interrupt)
+		if err == nil || errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+		return cmd.Process.Kill()
+	}
 	// WaitDelay ensures Go forcibly closes I/O pipes after the context
 	// expires, even if grandchild processes (e.g. sleep in a shell script)
 	// still hold them open.
