@@ -86,7 +86,12 @@ func newRegistryWhoamiCmd(stdout, stderr io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "whoami",
 		Short: "Show the authenticated registry account",
-		Args:  cobra.NoArgs,
+		Long: `Show the Registry account for the active credential.
+
+Explicit, environment, and stored native Registry tokens take precedence. For
+the canonical hosted Registry, gc otherwise uses the existing Gasworks login
+through the configured credential provider without storing its credential.`,
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if doRegistryWhoami(cmd.Context(), opts, stdout, stderr) != 0 {
 				return errExit
@@ -102,7 +107,7 @@ func newRegistryWhoamiCmd(stdout, stderr io.Writer) *cobra.Command {
 func doRegistryLogin(ctx context.Context, opts registryLoginOptions, stdout, stderr io.Writer) int {
 	baseURL, err := resolveRegistryPublishBaseURL(opts.RegistryURL)
 	if err != nil {
-		fmt.Fprintf(stderr, "gc pack registry login: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(stderr, "gc registry login: %v\n", err) //nolint:errcheck
 		return 1
 	}
 	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
@@ -118,18 +123,18 @@ func doRegistryLogin(ctx context.Context, opts registryLoginOptions, stdout, std
 			token, err = registryBrowserLogin(ctx, baseURL, opts.Label, stdout, !opts.NoBrowser)
 		}
 		if err != nil {
-			fmt.Fprintf(stderr, "gc pack registry login: %v\n", err) //nolint:errcheck
+			fmt.Fprintf(stderr, "gc registry login: %v\n", err) //nolint:errcheck
 			return 1
 		}
 	}
 
 	user, err := registryFetchCurrentUser(ctx, registryPublishHTTPClient, baseURL, token)
 	if err != nil {
-		fmt.Fprintf(stderr, "gc pack registry login: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(stderr, "gc registry login: %v\n", err) //nolint:errcheck
 		return 1
 	}
 	if err := writeRegistryConfiguredToken(baseURL, token); err != nil {
-		fmt.Fprintf(stderr, "gc pack registry login: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(stderr, "gc registry login: %v\n", err) //nolint:errcheck
 		return 1
 	}
 	fmt.Fprintf(stdout, "Logged in to %s as @%s\n", baseURL, user.Handle) //nolint:errcheck
@@ -139,28 +144,41 @@ func doRegistryLogin(ctx context.Context, opts registryLoginOptions, stdout, std
 func doRegistryWhoami(ctx context.Context, opts registryLoginOptions, stdout, stderr io.Writer) int {
 	baseURL, err := resolveRegistryPublishBaseURL(opts.RegistryURL)
 	if err != nil {
-		fmt.Fprintf(stderr, "gc pack registry whoami: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(stderr, "gc registry whoami: %v\n", err) //nolint:errcheck
 		return 1
 	}
+	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
+	defer cancel()
 	// Secrets resolve at execution time, never as flag defaults, so help
 	// output cannot render credential values from the environment.
 	token := strings.TrimSpace(registryFirstNonEmpty(opts.Token, os.Getenv("GC_REGISTRY_TOKEN")))
 	if token == "" {
 		token, err = readRegistryConfiguredToken(baseURL)
 		if err != nil {
-			fmt.Fprintf(stderr, "gc pack registry whoami: %v\n", err) //nolint:errcheck
+			fmt.Fprintf(stderr, "gc registry whoami: %v\n", err) //nolint:errcheck
 			return 1
 		}
 	}
+	var providerSource registryCredentialSource
 	if token == "" {
-		fmt.Fprintln(stderr, "gc pack registry whoami: not logged in; run `gc pack registry login`") //nolint:errcheck
-		return 1
+		providerSource, err = newRegistryGasworksCredentialSource(baseURL)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc registry whoami: configuring credential provider: %v\n", err) //nolint:errcheck
+			return 1
+		}
+		token, err = providerSource(ctx, false)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc registry whoami: minting credential: %v; run `gasworks login` or `gc registry login`\n", err) //nolint:errcheck
+			return 1
+		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, opts.Timeout)
-	defer cancel()
-	user, err := registryFetchCurrentUser(ctx, registryPublishHTTPClient, baseURL, token)
+	client := registryPublishHTTPClient
+	if providerSource != nil {
+		client = registryHTTPClientWithCredentialRefresh(client, providerSource)
+	}
+	user, err := registryFetchCurrentUser(ctx, client, baseURL, token)
 	if err != nil {
-		fmt.Fprintf(stderr, "gc pack registry whoami: %v\n", err) //nolint:errcheck
+		fmt.Fprintf(stderr, "gc registry whoami: %v\n", err) //nolint:errcheck
 		return 1
 	}
 	fmt.Fprintf(stdout, "@%s (%s)\n", user.Handle, user.ID) //nolint:errcheck

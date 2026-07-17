@@ -519,7 +519,7 @@ func TestPackRegistrySearchWarnsOnStaleCache(t *testing.T) {
 	}
 }
 
-func TestPackCommandTreeKeepsRegistryAndLegacySurfacesSeparate(t *testing.T) {
+func TestRegistryCommandTreeKeepsTopLevelAndPackCompatibilityPaths(t *testing.T) {
 	cmd := newPackCmd(&bytes.Buffer{}, &bytes.Buffer{})
 	for _, args := range [][]string{{"registry", "list"}, {"fetch"}, {"list"}} {
 		found, remaining, err := cmd.Find(args)
@@ -541,8 +541,11 @@ func TestPackCommandTreeKeepsRegistryAndLegacySurfacesSeparate(t *testing.T) {
 	}
 
 	root := newRootCmd(&bytes.Buffer{}, &bytes.Buffer{})
-	if found, _, err := root.Find([]string{"registry"}); err == nil && found != root {
-		t.Fatalf("gc registry should not be a root command; found=%s", found.CommandPath())
+	for _, name := range []string{"login", "publish", "whoami"} {
+		found, remaining, err := root.Find([]string{"registry", name})
+		if err != nil || found == root || len(remaining) != 0 || found.Name() != name {
+			t.Fatalf("gc registry %s not found: found=%v remaining=%v err=%v", name, found, remaining, err)
+		}
 	}
 }
 
