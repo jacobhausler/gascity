@@ -216,7 +216,7 @@ func renderRigStatusFromAPI(cr api.CachedRead[api.StatusView], rig config.Rig, d
 			if !rigStatusAgentBelongsToRig(a, rig.Name) {
 				continue
 			}
-			result.Agents = append(result.Agents, rigStatusAgentJSONFromAPI(a, dops))
+			result.Agents = append(result.Agents, rigStatusAgentJSONFromAPI(a, dops, cr.Body.Partial))
 		}
 		if err := writeCLIJSONLine(stdout, result); err != nil {
 			fmt.Fprintf(stderr, "gc rig status: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -251,7 +251,7 @@ func rigStatusAgentBelongsToRig(a api.StatusAgentView, rigName string) bool {
 	return len(a.QualifiedName) > len(prefix) && a.QualifiedName[:len(prefix)] == prefix
 }
 
-func rigStatusAgentJSONFromAPI(a api.StatusAgentView, dops drainOps) RigStatusAgent {
+func rigStatusAgentJSONFromAPI(a api.StatusAgentView, dops drainOps, partial bool) RigStatusAgent {
 	draining := false
 	if a.Running {
 		draining, _ = dops.isDraining(a.SessionName)
@@ -262,8 +262,10 @@ func rigStatusAgentJSONFromAPI(a api.StatusAgentView, dops drainOps) RigStatusAg
 		if draining {
 			status = "draining"
 		}
+	} else if partial {
+		status = "unknown"
 	}
-	if a.Suspended && !a.Running {
+	if a.Suspended && !a.Running && !partial {
 		status = "suspended"
 	}
 	return RigStatusAgent{
@@ -353,13 +355,13 @@ func renderRigStatusJSON(
 		if !a.SupportsInstanceExpansion() {
 			target := statusObservationTargetForIdentity(statusSnapshot, cityName, a.QualifiedName(), sessionTemplate)
 			obs := observeSessionTargetWithWarning("gc rig status", cityPath, store, sp, cfg, target, stderr)
-			result.Agents = append(result.Agents, rigStatusAgentJSON(a.Name, a.QualifiedName(), target, obs, dops, a.Suspended))
+			result.Agents = append(result.Agents, rigStatusAgentJSON(a.Name, a.QualifiedName(), target, obs, dops, a.Suspended, statusProviderPartial(sp)))
 			continue
 		}
 		for _, qualifiedInstance := range discoverPoolInstances(a.Name, a.Dir, sp0, &a, cityName, sessionTemplate, sp) {
 			target := statusObservationTargetForIdentity(statusSnapshot, cityName, qualifiedInstance, sessionTemplate)
 			obs := observeSessionTargetWithWarning("gc rig status", cityPath, store, sp, cfg, target, stderr)
-			result.Agents = append(result.Agents, rigStatusAgentJSON(a.Name, qualifiedInstance, target, obs, dops, a.Suspended))
+			result.Agents = append(result.Agents, rigStatusAgentJSON(a.Name, qualifiedInstance, target, obs, dops, a.Suspended, statusProviderPartial(sp)))
 		}
 	}
 	if err := writeCLIJSONLine(stdout, result); err != nil {
@@ -369,7 +371,7 @@ func renderRigStatusJSON(
 	return 0
 }
 
-func rigStatusAgentJSON(name, qualifiedName string, target statusObservationTarget, obs worker.LiveObservation, dops drainOps, agentSuspended bool) RigStatusAgent {
+func rigStatusAgentJSON(name, qualifiedName string, target statusObservationTarget, obs worker.LiveObservation, dops drainOps, agentSuspended bool, partial bool) RigStatusAgent {
 	suspended := agentSuspended || obs.Suspended || target.suspended
 	draining := false
 	if obs.Running {
@@ -381,8 +383,10 @@ func rigStatusAgentJSON(name, qualifiedName string, target statusObservationTarg
 		if draining {
 			status = "draining"
 		}
+	} else if partial {
+		status = "unknown"
 	}
-	if suspended && !obs.Running {
+	if suspended && !obs.Running && !partial {
 		status = "suspended"
 	}
 	return RigStatusAgent{

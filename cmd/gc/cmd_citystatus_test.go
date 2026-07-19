@@ -1370,3 +1370,54 @@ func TestRenderCityStatusFromAPIPartialRendersUnknownNotStopped(t *testing.T) {
 		t.Fatalf("status.PartialErrors = empty, want runtime partial diagnostic")
 	}
 }
+
+// TestRenderCityStatusFromAPIJSONPerAgentPartialMarker is the JSON-path
+// mirror of TestRenderCityStatusFromAPIPartialRendersUnknownNotStopped
+// (ra-kxzzt). The top-level status.Partial flag is not enough: a consumer
+// walking status.Agents cannot tell WHICH non-running row was actually
+// observed stopped versus which was a timed-out probe wearing a
+// running:false mask. Each agent row must carry its own marker.
+func TestRenderCityStatusFromAPIJSONPerAgentPartialMarker(t *testing.T) {
+	view := api.StatusView{
+		CityName:      "city",
+		CityPath:      "/home/user/city",
+		Partial:       true,
+		PartialErrors: []string{"runtime status probe incomplete; non-running agent rows are unknown"},
+		Agents: []api.StatusAgentView{
+			{Name: "timed-out-agent", QualifiedName: "timed-out-agent", Scope: "city", Running: false},
+			{Name: "running-agent", QualifiedName: "running-agent", Scope: "city", Running: true},
+		},
+		Summary: api.StatusSummaryView{TotalAgents: 2, RunningAgents: 1},
+	}
+	cr := api.CachedRead[api.StatusView]{Body: view}
+
+	var jsonOut bytes.Buffer
+	if code := renderCityStatusFromAPI(view.CityPath, cr, newFakeDrainOps(), true, &jsonOut); code != 0 {
+		t.Fatalf("json code = %d, want 0", code)
+	}
+	var status StatusJSON
+	if err := json.Unmarshal(jsonOut.Bytes(), &status); err != nil {
+		t.Fatalf("unmarshal: %v; output: %s", err, jsonOut.String())
+	}
+	if len(status.Agents) != 2 {
+		t.Fatalf("status.Agents = %#v, want 2 rows", status.Agents)
+	}
+	var timedOut, running *StatusAgentJSON
+	for i := range status.Agents {
+		switch status.Agents[i].Name {
+		case "timed-out-agent":
+			timedOut = &status.Agents[i]
+		case "running-agent":
+			running = &status.Agents[i]
+		}
+	}
+	if timedOut == nil || running == nil {
+		t.Fatalf("status.Agents = %#v, missing expected rows", status.Agents)
+	}
+	if !timedOut.Partial {
+		t.Fatalf("timed-out-agent row = %#v, want Partial=true — a non-running row during a partial probe is unobserved, not a confirmed stop", *timedOut)
+	}
+	if running.Partial {
+		t.Fatalf("running-agent row = %#v, want Partial=false — a running row is a positive observation regardless of the global partial flag", *running)
+	}
+}

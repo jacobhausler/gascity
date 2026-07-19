@@ -286,6 +286,7 @@ func collectCityStatusSnapshotFromStoreSnapshot(
 		obs := observations[i]
 		p.row.Agent.Running = obs.Running
 		p.row.Agent.Suspended = p.suspended || obs.Suspended || p.target.suspended
+		p.row.Agent.Partial = snapshot.Partial && !obs.Running
 		snapshot.Agents = append(snapshot.Agents, p.row)
 		snapshot.Summary.TotalAgents++
 		if obs.Running {

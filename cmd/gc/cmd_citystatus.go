@@ -66,6 +66,12 @@ type StatusAgentJSON struct {
 	Running       bool      `json:"running"`
 	Suspended     bool      `json:"suspended"`
 	Pool          *PoolJSON `json:"pool,omitempty"`
+	// Partial is true when this row's Running=false was never actually
+	// observed — the runtime status probe timed out (see the top-level
+	// Partial/PartialErrors flags) and this row is the boundedStatusCall
+	// zero-value fallback, not a confirmed stop. A Running=true row is
+	// always a positive observation, so Partial is always false there.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // PoolJSON represents pool configuration in JSON output.
@@ -298,6 +304,7 @@ func snapshotFromStatusView(cityPath string, v api.StatusView) cityStatusSnapsho
 				Scope:         a.Scope,
 				Running:       a.Running,
 				Suspended:     a.Suspended,
+				Partial:       v.Partial && !a.Running,
 			},
 			SessionName: a.SessionName,
 			GroupName:   a.GroupName,

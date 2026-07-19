@@ -255,6 +255,54 @@ func TestDoRigStatusReportsObservationErrors(t *testing.T) {
 	}
 }
 
+// TestRenderRigStatusFromAPIJSONPerAgentPartialMarker is the rig-status JSON
+// mirror of the city-status gap (ra-kxzzt): the human render path already
+// distinguishes a timed-out probe from a genuine stop via
+// agentStatusLineWithPartial (see line 237's cr.Body.Partial argument), but
+// the JSON row builder rigStatusAgentJSONFromAPI hardcodes status="stopped"
+// for any non-running row, with no way for a JSON consumer to tell a
+// confirmed stop from an unobserved one.
+func TestRenderRigStatusFromAPIJSONPerAgentPartialMarker(t *testing.T) {
+	rig := config.Rig{Name: "frontend", Path: "/tmp/frontend"}
+	view := api.StatusView{
+		CityPath: "/tmp/city",
+		CityName: "city",
+		Partial:  true,
+		Agents: []api.StatusAgentView{
+			{Name: "worker", QualifiedName: "frontend/worker", Scope: "rig", Running: false},
+			{Name: "poller", QualifiedName: "frontend/poller", Scope: "rig", Running: true},
+		},
+	}
+	cr := api.CachedRead[api.StatusView]{Body: view}
+
+	var stdout, stderr bytes.Buffer
+	if code := renderRigStatusFromAPI(cr, rig, newFakeDrainOps(), true, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d, want 0; stderr=%s", code, stderr.String())
+	}
+	var result RigStatusJSON
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v\nraw: %s", err, stdout.String())
+	}
+	byName := map[string]RigStatusAgent{}
+	for _, a := range result.Agents {
+		byName[a.QualifiedName] = a
+	}
+	worker, ok := byName["frontend/worker"]
+	if !ok {
+		t.Fatalf("result.Agents = %+v, missing frontend/worker", result.Agents)
+	}
+	if worker.Status == "stopped" {
+		t.Fatalf("worker.Status = %q, want NOT authoritative 'stopped' during a partial probe (want e.g. 'unknown')", worker.Status)
+	}
+	poller, ok := byName["frontend/poller"]
+	if !ok {
+		t.Fatalf("result.Agents = %+v, missing frontend/poller", result.Agents)
+	}
+	if poller.Status != "running" {
+		t.Fatalf("poller.Status = %q, want 'running' — a positive observation is authoritative regardless of the global partial flag", poller.Status)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Six-row read-path routing matrix for `gc rig status` (ADR 0001, ga-h6w).
 // ---------------------------------------------------------------------------
