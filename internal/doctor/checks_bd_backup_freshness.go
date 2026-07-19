@@ -103,7 +103,9 @@ func (c *BdBackupFreshnessCheck) Run(_ *CheckContext) *CheckResult {
 	r.Message = strings.Join(findings, "; ")
 	r.FixHint = "re-enable or repair the bd backup pipeline for the listed scopes " +
 		"(bd backup sync; verify backup.enabled and BD_BACKUP_ENABLED), then confirm " +
-		"bd backup status shows a recent sync"
+		"bd backup status shows a recent sync for the store named in the finding — " +
+		"a 'dolt backup' finding clears via the Dolt Backup: Last sync field, not " +
+		"the legacy Backup: block, which stays frozen after migration"
 	return r
 }
 
@@ -141,10 +143,62 @@ func (c *BdBackupFreshnessCheck) freshnessScanTargets() []bdBackupFreshnessTarge
 	return targets
 }
 
-// scanBackupFreshness reads <beadsDir>/backup/backup_state.json and returns a
-// finding when the last sync is older than maxAge or the timestamp cannot be
-// read. A missing backup_state.json returns ("", false) — not this check's job.
+// scanBackupFreshness reports whether a scope's ACTIVE backup pipeline has
+// stopped syncing.
+//
+// A scope has two possible pipelines and they record their progress in
+// different files. Once a Dolt backup destination is registered
+// (.beads/dolt-backup.json), it — not the legacy embedded-store pipeline — is
+// what actually runs, and it stamps .beads/dolt-backup-state.json on every
+// successful sync. The legacy .beads/backup/backup_state.json is frozen at
+// whatever it held when the scope migrated, and a successful `bd backup sync`
+// does not move it.
+//
+// Reading the legacy file on a migrated scope therefore produces a warning no
+// operator action can ever clear: the FixHint says to repair the pipeline and
+// confirm a recent sync, but the pipeline is healthy and the field it names is
+// never written again. Worse, that frozen state advertises a Dolt commit
+// belonging to the abandoned store — an incident responder who restores from it
+// recovers a pre-migration snapshot and believes the scope is back.
+//
+// So: prefer the Dolt backup state whenever a Dolt destination is registered,
+// and fall back to the legacy file only for scopes that never migrated. Each
+// finding names the store it describes, so the reader is never left guessing
+// which of the two a message is about. A scope with neither file returns
+// ("", false) — "no backup at all" is DoltBackupCheck's job, not this one's.
 func scanBackupFreshness(label, beadsDir string, now time.Time, maxAge time.Duration) (string, bool) {
+	if _, err := os.Stat(filepath.Join(beadsDir, "dolt-backup.json")); err == nil {
+		return scanDoltBackupFreshness(label, beadsDir, now, maxAge)
+	}
+	return scanLegacyBackupFreshness(label, beadsDir, now, maxAge)
+}
+
+// scanDoltBackupFreshness reads <beadsDir>/dolt-backup-state.json, the file a
+// successful Dolt backup sync stamps. A registered destination with no state
+// file at all is a real finding — it means the backup has never once completed.
+func scanDoltBackupFreshness(label, beadsDir string, now time.Time, maxAge time.Duration) (string, bool) {
+	const store = "dolt backup"
+	path := filepath.Join(beadsDir, "dolt-backup-state.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Sprintf("%s: %s is registered (dolt-backup.json) but has never synced "+
+				"— no dolt-backup-state.json", label, store), true
+		}
+		return fmt.Sprintf("%s: read dolt-backup-state.json: %v", label, err), true
+	}
+	var state struct {
+		LastSync string `json:"last_sync"`
+	}
+	if err := json.Unmarshal(data, &state); err != nil {
+		return fmt.Sprintf("%s: dolt-backup-state.json is unparseable: %v", label, err), true
+	}
+	return freshnessFinding(label, store, "dolt-backup-state.json", "last_sync", state.LastSync, now, maxAge)
+}
+
+// scanLegacyBackupFreshness reads <beadsDir>/backup/backup_state.json for scopes
+// that have not migrated to a Dolt backup destination.
+func scanLegacyBackupFreshness(label, beadsDir string, now time.Time, maxAge time.Duration) (string, bool) {
 	path := filepath.Join(beadsDir, "backup", "backup_state.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -159,17 +213,24 @@ func scanBackupFreshness(label, beadsDir string, now time.Time, maxAge time.Dura
 	if err := json.Unmarshal(data, &state); err != nil {
 		return fmt.Sprintf("%s: backup_state.json is unparseable: %v", label, err), true
 	}
-	ts := strings.TrimSpace(state.Timestamp)
+	return freshnessFinding(label, "embedded-store backup", "backup_state.json", "timestamp", state.Timestamp, now, maxAge)
+}
+
+// freshnessFinding turns one pipeline's recorded sync timestamp into a finding,
+// naming both the store and the field it came from so the message is traceable
+// back to the file the check actually read.
+func freshnessFinding(label, store, file, field, raw string, now time.Time, maxAge time.Duration) (string, bool) {
+	ts := strings.TrimSpace(raw)
 	if ts == "" {
-		return fmt.Sprintf("%s: backup_state.json has no timestamp", label), true
+		return fmt.Sprintf("%s: %s: %s has no %s", label, store, file, field), true
 	}
 	synced, err := time.Parse(time.RFC3339, ts)
 	if err != nil {
-		return fmt.Sprintf("%s: backup_state.json timestamp %q is unparseable: %v", label, ts, err), true
+		return fmt.Sprintf("%s: %s: %s %s %q is unparseable: %v", label, store, file, field, ts, err), true
 	}
 	if age := now.Sub(synced); age > maxAge {
-		return fmt.Sprintf("%s: last bd backup sync was %s ago (> %s) — backup pipeline may be disabled or broken",
-			label, age.Round(time.Minute), maxAge), true
+		return fmt.Sprintf("%s: %s: last sync was %s ago (> %s) — backup pipeline may be disabled or broken",
+			label, store, age.Round(time.Minute), maxAge), true
 	}
 	return "", false
 }
