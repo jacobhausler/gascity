@@ -6308,8 +6308,11 @@ func TestDryRunOnFormula(t *testing.T) {
 	if !strings.Contains(out, "Pre-check: BL-42 has no existing molecule/wisp children") {
 		t.Errorf("stdout missing pre-check: %s", out)
 	}
-	if !strings.Contains(out, "bd update 'BL-42' --set-metadata gc.routed_to=mayor") {
+	if !strings.Contains(out, "bd update '<wisp-root>' --set-metadata gc.routed_to=mayor") {
 		t.Errorf("stdout missing route command: %s", out)
+	}
+	if !strings.Contains(out, "The wisp root bead (not the work bead) is routed to the agent.") {
+		t.Errorf("stdout missing wisp-root clarification: %s", out)
 	}
 	if len(runner.calls) != 0 {
 		t.Errorf("got %d runner calls, want 0: %v", len(runner.calls), runner.calls)
@@ -6515,7 +6518,7 @@ func TestDryRunLeafTaskViaBatchDispatchOnFormula(t *testing.T) {
 	if !strings.Contains(out, "Would run: gc formula cook code-review --attach BL-42") {
 		t.Errorf("stdout missing cook command: %s", out)
 	}
-	if !strings.Contains(out, "bd update 'BL-42' --set-metadata gc.routed_to=hw/polecat") {
+	if !strings.Contains(out, "bd update '<wisp-root>' --set-metadata gc.routed_to=hw/polecat") {
 		t.Errorf("stdout missing route command: %s", out)
 	}
 	if !strings.Contains(out, "No side effects executed (--dry-run).") {
