@@ -3571,5 +3571,47 @@ func TestFindSpecBeadPrefersRefOverStepID(t *testing.T) {
 	}
 }
 
+// TestBuildAttemptRecipePreservesDescription verifies that re-minted attempt
+// beads carry the step's description. Attempt 1 is minted by ApplyRetries
+// (cloneStep copies Description); attempts 2+ are minted by buildAttemptRecipe,
+// which previously dropped it on the floor — ra-eyszz.
+//
+// Falsifiable floor: against unpatched source (no Description: step.Description
+// in the rootStep literal) this test FAILS with
+//   root step Description = "", want "Full step body"
+// The passing case is what the fix must produce.
+// Contrast against TestBuildAttemptRecipeSimpleRetry, which passes on both
+// unpatched and patched because it never checks Description.
+func TestBuildAttemptRecipePreservesDescription(t *testing.T) {
+	t.Parallel()
+
+	step := &formula.Step{
+		ID:          "intake",
+		Title:       "Do the intake",
+		Description: "Full step body with instructions",
+		Type:        "task",
+		Retry:       &formula.RetrySpec{MaxAttempts: 3},
+	}
+	control := beads.Bead{
+		ID: "gc-ctrl-1",
+		Metadata: map[string]string{
+			"gc.step_id":  "intake",
+			"gc.step_ref": "mol-test.intake",
+		},
+	}
+
+	for _, attempt := range []int{1, 2, 3} {
+		recipe := buildAttemptRecipe(step, control, attempt)
+		if len(recipe.Steps) == 0 {
+			t.Fatalf("attempt %d: recipe has no steps", attempt)
+		}
+		rootStep := recipe.Steps[0]
+		if rootStep.Description != step.Description {
+			t.Errorf("attempt %d: root step Description = %q, want %q",
+				attempt, rootStep.Description, step.Description)
+		}
+	}
+}
+
 // Unused import guard.
 var _ = strconv.Itoa
