@@ -33,12 +33,37 @@ func storeHealthFromInputs(cityPath string, sizeBytes int64, liveRows int, lastG
 		Warning:     h.Warning,
 		ThresholdMB: h.ThresholdMB,
 	}
-	if !h.LastGCAt.IsZero() {
+	switch {
+	case !h.LastGCAt.IsZero():
 		out.LastGCAt = h.LastGCAt.UTC().Format(time.RFC3339)
+		out.LastGCStatus = h.LastGCStatus
+	case h.LastGCStatus != "":
+		// No timestamp, but a non-empty status ("unknown" when the bounded
+		// scan could not complete in time) — surface it distinctly from
+		// "" (scan completed, no maintenance event found). Dropping this
+		// silently would report "never" when the truth is "don't know".
 		out.LastGCStatus = h.LastGCStatus
 	}
 	return out
 }
+
+// statusStoreHealthMaintenanceTimeout bounds storehealth.LastMaintenance so a
+// live city with a large events.jsonl cannot stall `gc status` for seconds.
+// LastMaintenance already fast-paths via events.TailProvider when available
+// (ra-ahlsc), but its rare fallback (no matching event ever seen in the
+// active file — a legitimate "never happened", or an occurrence rotated into
+// an archive) is still an unbounded scan; this timeout is the backstop for
+// that case, mirroring statusStoreHealthTimeout above. On timeout the result
+// is reported as "unknown" — distinct from "" (scan completed, genuinely
+// none found) — because a timeout means the scan did NOT complete and we
+// cannot honestly claim maintenance never ran.
+const statusStoreHealthMaintenanceTimeout = time.Second
+
+// lastMaintenanceUnknownStatus marks a LastMaintenance call that could not
+// complete within statusStoreHealthMaintenanceTimeout. It is deliberately
+// distinct from the empty string, which means the scan completed and found
+// no store-maintenance event.
+const lastMaintenanceUnknownStatus = "unknown"
 
 // collectStoreHealth measures the Dolt store at cityPath and the latest
 // maintenance event via ep, returning a populated *StoreHealth.
@@ -47,8 +72,37 @@ func storeHealthFromInputs(cityPath string, sizeBytes int64, liveRows int, lastG
 func collectStoreHealth(cityPath string, store beads.Store, ep events.Provider) *StoreHealth {
 	size := storehealth.WalkSize(storehealth.StorePath(cityPath))
 	rows := liveRowCount(store)
-	lastAt, lastStatus := storehealth.LastMaintenance(ep)
+	lastAt, lastStatus := lastMaintenanceWithTimeout(ep)
 	return storeHealthFromInputs(cityPath, size, rows, lastAt, lastStatus)
+}
+
+// lastMaintenanceWithTimeout runs storehealth.LastMaintenance on a goroutine
+// and returns its result, or (zero, "unknown") if it does not finish within
+// statusStoreHealthMaintenanceTimeout. storehealth.LastMaintenance takes no
+// context, so a stalled scan cannot be canceled — the goroutine is left to
+// finish on its own (harmless in the short-lived `gc status` process).
+// Mirrors listBeadsWithTimeout below.
+func lastMaintenanceWithTimeout(ep events.Provider) (time.Time, string) {
+	if ep == nil {
+		return time.Time{}, ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), statusStoreHealthMaintenanceTimeout)
+	defer cancel()
+	type maintResult struct {
+		ts     time.Time
+		status string
+	}
+	done := make(chan maintResult, 1)
+	go func() {
+		ts, status := storehealth.LastMaintenance(ep)
+		done <- maintResult{ts: ts, status: status}
+	}()
+	select {
+	case r := <-done:
+		return r.ts, r.status
+	case <-ctx.Done():
+		return time.Time{}, lastMaintenanceUnknownStatus
+	}
 }
 
 // liveRowCount returns the number of beads known to store, or 0 when store is
@@ -117,8 +171,11 @@ func renderStoreHealthBlock(w io.Writer, h *StoreHealth) {
 		suffix = "  \u26a0 maintenance overdue"
 	}
 	fmt.Fprintf(w, "  Ratio:       %.1f MB/row  (threshold %.1f MB/row)%s\n", h.RatioMB, h.ThresholdMB, suffix) //nolint:errcheck // best-effort stdout
-	if h.LastGCAt != "" {
+	switch {
+	case h.LastGCAt != "":
 		fmt.Fprintf(w, "  Last GC:     %s (%s)\n", h.LastGCAt, h.LastGCStatus) //nolint:errcheck // best-effort stdout
+	case h.LastGCStatus != "":
+		fmt.Fprintf(w, "  Last GC:     %s\n", h.LastGCStatus) //nolint:errcheck // best-effort stdout
 	}
 }
 

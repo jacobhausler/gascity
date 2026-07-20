@@ -172,3 +172,81 @@ func TestCollectStoreHealthReadsEvents(t *testing.T) {
 		t.Errorf("Path = %q, want %q", h.Path, storehealth.StorePath("/c"))
 	}
 }
+
+// slowMaintenanceProvider embeds events.Provider (the interface, not a
+// concrete TailProvider-capable type) so it deliberately does NOT satisfy
+// events.TailProvider — every call is forced down LastMaintenance's
+// full-scan fallback path, modeling the pathological case ra-ahlsc is
+// bounding: no matching event ever seen, or a provider without ListTail.
+type slowMaintenanceProvider struct {
+	events.Provider
+	delay time.Duration
+}
+
+func (p *slowMaintenanceProvider) List(filter events.Filter) ([]events.Event, error) {
+	time.Sleep(p.delay)
+	return p.Provider.List(filter)
+}
+
+func TestLastMaintenanceWithTimeoutNilProvider(t *testing.T) {
+	ts, status := lastMaintenanceWithTimeout(nil)
+	if !ts.IsZero() || status != "" {
+		t.Fatalf("lastMaintenanceWithTimeout(nil) = (%v,%q), want (zero,\"\")", ts, status)
+	}
+}
+
+func TestLastMaintenanceWithTimeoutFastProviderReturnsPromptly(t *testing.T) {
+	ep := events.NewFake()
+	ts := time.Date(2026, 4, 8, 12, 0, 0, 0, time.UTC)
+	payload, _ := json.Marshal(events.StoreMaintenanceDonePayload{DurationSeconds: 5})
+	ep.Record(events.Event{Type: events.StoreMaintenanceDone, Ts: ts, Payload: payload})
+
+	got, status := lastMaintenanceWithTimeout(ep)
+	if !got.Equal(ts) || status != "success" {
+		t.Fatalf("lastMaintenanceWithTimeout(fast) = (%v,%q), want (%v,success)", got, status, ts)
+	}
+}
+
+func TestLastMaintenanceWithTimeoutReportsUnknownOnSlowProvider(t *testing.T) {
+	p := &slowMaintenanceProvider{
+		Provider: events.NewFake(),
+		delay:    statusStoreHealthMaintenanceTimeout + 300*time.Millisecond,
+	}
+	// Sanity: this stub must NOT satisfy TailProvider, or the test would
+	// exercise the fast path instead of the fallback this bead bounds.
+	if _, ok := interface{}(p).(events.TailProvider); ok {
+		t.Fatalf("slowMaintenanceProvider unexpectedly implements TailProvider")
+	}
+
+	start := time.Now()
+	ts, status := lastMaintenanceWithTimeout(p)
+	elapsed := time.Since(start)
+
+	if !ts.IsZero() || status != lastMaintenanceUnknownStatus {
+		t.Fatalf("lastMaintenanceWithTimeout(slow) = (%v,%q), want (zero,%q)", ts, status, lastMaintenanceUnknownStatus)
+	}
+	if elapsed >= p.delay {
+		t.Fatalf("lastMaintenanceWithTimeout took %v, want bounded well under the %v provider delay", elapsed, p.delay)
+	}
+}
+
+func TestStoreHealthFromInputsSurfacesUnknownStatusWithoutTimestamp(t *testing.T) {
+	h := storeHealthFromInputs("/c", 1, 1, time.Time{}, lastMaintenanceUnknownStatus)
+	if h.LastGCAt != "" {
+		t.Errorf("LastGCAt = %q, want empty", h.LastGCAt)
+	}
+	if h.LastGCStatus != lastMaintenanceUnknownStatus {
+		t.Errorf("LastGCStatus = %q, want %q — dropping this silently would report \"never\" when the truth is \"don't know\"", h.LastGCStatus, lastMaintenanceUnknownStatus)
+	}
+}
+
+func TestRenderStoreHealthBlockShowsUnknownWithoutTimestamp(t *testing.T) {
+	h := storeHealthFromInputs("/c", 50_000_000, 221, time.Time{}, lastMaintenanceUnknownStatus)
+	var buf bytes.Buffer
+	renderStoreHealthBlock(&buf, h)
+
+	out := buf.String()
+	if !strings.Contains(out, "Last GC:     unknown") {
+		t.Errorf("output missing unknown Last GC line:\n%s", out)
+	}
+}

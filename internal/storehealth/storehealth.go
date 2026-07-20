@@ -94,13 +94,47 @@ func WalkSize(path string) int64 {
 // "failed") of the most-recent store-maintenance event in provider.
 // Zero time and empty status when no events, provider is nil, or the
 // provider returns an error.
+//
+// Shape: a naive implementation does two unbounded full-file List scans
+// (one per event type) — on a large, long-lived events.jsonl this alone
+// was measured to cost 5-10s, the entire floor of `gc status` (ra-21k1t).
+// When ep also implements events.TailProvider, LastMaintenance instead
+// asks for just the single trailing matching event of each type. A tail
+// hit is always authoritative: archives are strictly older than the
+// active file a TailProvider reads, so a match found there can never be
+// beaten by anything rotated out of it. Only when NEITHER type has a
+// tail hit — genuinely never happened, or its only occurrence rotated
+// into an archive the tail read does not cover — does this fall back to
+// the full (archive-inclusive) scan, so the answer is never wrong, only
+// occasionally as slow as before. Callers that cannot afford that rare
+// slow path should bound it themselves (see cmd/gc's
+// storeHealthMaintenanceTimeout, which mirrors this pattern).
 func LastMaintenance(ep events.Provider) (time.Time, string) {
 	if ep == nil {
 		return time.Time{}, ""
 	}
+	if tp, ok := ep.(events.TailProvider); ok {
+		if ts, status, found := latestMaintenanceEvent(func(f events.Filter) ([]events.Event, error) {
+			return tp.ListTail(f, 1)
+		}); found {
+			return ts, status
+		}
+	}
+	ts, status, _ := latestMaintenanceEvent(ep.List)
+	return ts, status
+}
+
+// latestMaintenanceEvent finds the most-recent store-maintenance event
+// across both StoreMaintenanceDone and StoreMaintenanceFailed by calling
+// list once per type. found is false only when list returned no matching
+// event (and no error) for either type — i.e. a genuine, complete answer
+// of "none seen by this list call", as opposed to a list error, which is
+// silently skipped exactly as the pre-existing behavior did.
+func latestMaintenanceEvent(list func(events.Filter) ([]events.Event, error)) (time.Time, string, bool) {
 	var (
 		latestTs     time.Time
 		latestStatus string
+		found        bool
 	)
 	for _, spec := range []struct {
 		typ    string
@@ -109,18 +143,19 @@ func LastMaintenance(ep events.Provider) (time.Time, string) {
 		{events.StoreMaintenanceDone, "success"},
 		{events.StoreMaintenanceFailed, "failed"},
 	} {
-		evts, err := ep.List(events.Filter{Type: spec.typ})
+		evts, err := list(events.Filter{Type: spec.typ})
 		if err != nil {
 			continue
 		}
 		for _, e := range evts {
-			if e.Ts.After(latestTs) {
+			if !found || e.Ts.After(latestTs) {
 				latestTs = e.Ts
 				latestStatus = spec.status
+				found = true
 			}
 		}
 	}
-	return latestTs, latestStatus
+	return latestTs, latestStatus, found
 }
 
 const bytesPerMB = 1_000_000
