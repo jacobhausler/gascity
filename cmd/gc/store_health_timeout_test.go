@@ -45,11 +45,14 @@ func TestLiveRowCountBoundsSlowScan(t *testing.T) {
 	}
 
 	start := time.Now()
-	got := liveRowCount(store)
+	got, complete := liveRowCount(store)
 	elapsed := time.Since(start)
 
 	if got != 0 {
 		t.Fatalf("liveRowCount = %d, want 0 when the scan times out", got)
+	}
+	if complete {
+		t.Fatalf("complete = true, want false when the scan times out — a timeout zero must be flagged incomplete (ra-nka1c)")
 	}
 	if elapsed > statusStoreHealthTimeout+2*time.Second {
 		t.Fatalf("liveRowCount did not bound the scan: took %s (bound %s)", elapsed, statusStoreHealthTimeout)
@@ -72,7 +75,27 @@ func TestLiveRowCountUsesCounterFastPath(t *testing.T) {
 		},
 	}
 
-	if got := liveRowCount(store); got != 42 {
+	got, complete := liveRowCount(store)
+	if got != 42 {
 		t.Fatalf("liveRowCount = %d, want 42 from the Counter fast path", got)
+	}
+	if !complete {
+		t.Fatalf("complete = false, want true when the Counter answers")
+	}
+}
+
+// TestLiveRowCountFabricatedZeroWouldPassWarningCheck is the falsifiable
+// control for the incomplete-scan case above: it proves an incomplete zero
+// row count, left unflagged, silently reads as "healthy" through
+// storeHealthFromInputs — the exact failure this fix closes. It must FAIL on
+// the pre-fix behavior (complete ignored, Warning computed from the raw
+// zero) and PASS once Warning is forced true for an incomplete count.
+func TestLiveRowCountFabricatedZeroWouldPassWarningCheck(t *testing.T) {
+	h := storeHealthFromInputs("/c", 410_781_063, 0, false, time.Time{}, "")
+	if !h.Warning {
+		t.Fatalf("Warning = false for an incomplete 0-row count against a 410MB store; want true — an unflagged incomplete count reads as healthy")
+	}
+	if h.LiveRowsComplete {
+		t.Fatalf("LiveRowsComplete = true, want false")
 	}
 }
