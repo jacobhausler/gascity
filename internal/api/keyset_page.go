@@ -21,15 +21,34 @@ type keysetKey struct {
 	ID        string
 }
 
+// stripMonotonic drops any monotonic clock reading from t. time.Time.Equal,
+// Before, and After compare monotonic readings instead of wall-clock time
+// whenever BOTH operands carry one (see the time package docs) — so two
+// same-process rows created via time.Now() microseconds apart can format
+// identically and still be !Equal(), while a cursor's CreatedAt, having been
+// round-tripped through JSON (time.Parse never sets a monotonic reading),
+// never carries one. Comparing a monotonic-bearing row against a
+// monotonic-free boundary silently falls back to wall-clock comparison — a
+// different, coarser order than the one sortKeysetDesc produced by comparing
+// two monotonic-bearing rows against each other. That inconsistency is what
+// let a page boundary skip or duplicate a row (ra-od3o5): round every
+// CreatedAt through this before it takes part in a keyset comparison, so
+// sorting and boundary-scanning always agree on the same (wall-clock-only)
+// order regardless of which side a value came from.
+func stripMonotonic(t time.Time) time.Time {
+	return t.Round(0)
+}
+
 // keysetAfterDesc reports whether k sorts strictly after boundary b in
 // (created_at DESC, id DESC) order. The comparison mirrors
 // beads.SeekBoundary.After exactly — tie-break included — so a page boundary
 // can never skip or duplicate a row.
 func keysetAfterDesc(k, b keysetKey) bool {
-	if k.CreatedAt.Before(b.CreatedAt) {
+	kc, bc := stripMonotonic(k.CreatedAt), stripMonotonic(b.CreatedAt)
+	if kc.Before(bc) {
 		return true
 	}
-	return k.CreatedAt.Equal(b.CreatedAt) && k.ID < b.ID
+	return kc.Equal(bc) && k.ID < b.ID
 }
 
 // sortKeysetDesc sorts items into the (created_at DESC, id DESC) total order —
@@ -39,8 +58,9 @@ func keysetAfterDesc(k, b keysetKey) bool {
 func sortKeysetDesc[T any](items []T, key func(T) keysetKey) {
 	sort.Slice(items, func(i, j int) bool {
 		ki, kj := key(items[i]), key(items[j])
-		if !ki.CreatedAt.Equal(kj.CreatedAt) {
-			return ki.CreatedAt.After(kj.CreatedAt)
+		kic, kjc := stripMonotonic(ki.CreatedAt), stripMonotonic(kj.CreatedAt)
+		if !kic.Equal(kjc) {
+			return kic.After(kjc)
 		}
 		return ki.ID > kj.ID
 	})
