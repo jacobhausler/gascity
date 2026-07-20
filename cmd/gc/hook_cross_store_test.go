@@ -225,7 +225,7 @@ func TestBestStoreWithWorkShortCircuitsOwnInProgress(t *testing.T) {
 
 // TestBestStoreWithWorkDegradesToFirstHitOnUnrankableOutput pins the degradation
 // rule: a work_query that does not emit a JSON array of objects cannot be
-// compared, so selection falls back to the pre-existing first-hit behaviour
+// compared, so selection falls back to the pre-existing first-hit behavior
 // rather than reordering on a comparison that was never made.
 func TestBestStoreWithWorkDegradesToFirstHitOnUnrankableOutput(t *testing.T) {
 	stores := []hookStore{{dir: "city"}, {dir: "riga"}}

@@ -165,7 +165,7 @@ func rigScopedHookRig(cfg *config.City, agentIdentity string) string {
 // no bead becomes visible that was not already routed or assigned to it.
 //
 // Ties keep the slice order, so an equally-ranked candidate in the agent's own
-// store still wins — the pre-existing behaviour whenever ranking is a wash.
+// store still wins — the pre-existing behavior whenever ranking is a wash.
 //
 // Two deliberate carve-outs from ranking:
 //   - A tier-0 (in_progress) candidate in the PRIMARY store short-circuits.
@@ -174,7 +174,7 @@ func rigScopedHookRig(cfg *config.City, agentIdentity string) string {
 //   - If any hit's output cannot be ranked (non-JSON, or JSON that is not an
 //     array of objects), selection degrades to first-hit for the whole call.
 //     Reordering on a comparison we could not actually make would be worse than
-//     the behaviour it replaces.
+//     the behavior it replaces.
 //
 // When no store has ready work, an error on the agent's OWN store (identified by
 // primary, not by slice position) is surfaced so emitCityWorkQueryFailure can
