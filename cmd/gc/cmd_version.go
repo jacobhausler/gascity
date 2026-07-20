@@ -71,9 +71,7 @@ func normalizeVersion(v string) string {
 	}
 	// Strip +incompatible only (Go v2+ module compat sentinel for repos without a /vN import path).
 	// Preserve all other build metadata (e.g. +ra.1 marks a locally-patched release).
-	if strings.HasSuffix(v, "+incompatible") {
-		v = v[:len(v)-len("+incompatible")]
-	}
+	v = strings.TrimSuffix(v, "+incompatible")
 	for _, re := range goPseudoVersionSuffixRes {
 		if m := re.FindStringSubmatch(v); len(m) == 2 {
 			v = m[1]
