@@ -2381,6 +2381,13 @@ func TestSlingAttachGraphFormulaCreatesConvoyFirstRoot(t *testing.T) {
 	if got := sourceAfter.Metadata["workflow_id"]; got != "" {
 		t.Fatalf("source workflow_id = %q, want empty", got)
 	}
+	// ra-jduft ruling: the work bead's gc.routed_to is the single source of
+	// truth the pool claim path reads, so the convoy-first attach path must
+	// restamp it even though it deliberately leaves workflow_id/source_bead_id
+	// unset here.
+	if got := sourceAfter.Metadata[beadmeta.RoutedToMetadataKey]; got != "mayor" {
+		t.Fatalf("source gc.routed_to = %q, want mayor", got)
+	}
 	members, err := convoycore.Members(deps.Store, inputConvoyID, true)
 	if err != nil {
 		t.Fatalf("Members: %v", err)
@@ -2601,6 +2608,15 @@ func TestDoSlingDefaultGraphFormulaAllowsDifferentLiveBareBeadRoots(t *testing.T
 	}
 	if result.WorkflowID == "" || result.WorkflowID == first.WorkflowID {
 		t.Fatalf("WorkflowID = %q, want fresh root different from %s", result.WorkflowID, first.WorkflowID)
+	}
+	// ra-jduft ruling: the default_sling_formula attach branch must also
+	// restamp the work bead's gc.routed_to, same as the --on branch above.
+	sourceAfter, err := deps.Store.Get(source.ID)
+	if err != nil {
+		t.Fatalf("Get(source): %v", err)
+	}
+	if got := sourceAfter.Metadata[beadmeta.RoutedToMetadataKey]; got != "mayor" {
+		t.Fatalf("source gc.routed_to = %q, want mayor", got)
 	}
 }
 

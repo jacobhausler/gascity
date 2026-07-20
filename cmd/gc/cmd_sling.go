@@ -1738,12 +1738,6 @@ func dryRunSingle(opts slingOpts, deps slingDeps, querier BeadQuerier, stdout, s
 		if opts.InlineText {
 			previewBeadID = "<new-bead-id>"
 		}
-		// routePreviewBeadID is what the "Route command" preview below
-		// names. It starts equal to previewBeadID (the work bead) but is
-		// overridden to the wisp-root placeholder in the attach branches
-		// below, since a real run routes the cooked workflow root, not
-		// the work bead itself.
-		routePreviewBeadID := previewBeadID
 		attachingFormula := false
 		if opts.OnFormula != "" {
 			if preCheck {
@@ -1767,7 +1761,6 @@ func dryRunSingle(opts slingOpts, deps slingDeps, querier BeadQuerier, stdout, s
 			}
 			w("")
 			attachingFormula = true
-			routePreviewBeadID = "<wisp-root>"
 		} else if !opts.NoFormula && a.EffectiveDefaultSlingFormula() != "" {
 			if preCheck {
 				if rc := dryRunReportBlockingMolecule(opts, deps, querier, stderr); rc != 0 {
@@ -1789,20 +1782,20 @@ func dryRunSingle(opts slingOpts, deps slingDeps, querier BeadQuerier, stdout, s
 			}
 			w("")
 			attachingFormula = true
-			routePreviewBeadID = "<wisp-root>"
 		}
 
-		routeCmd, _ := sling.BuildSlingCommandForAgent("sling_query", a.EffectiveSlingQuery(), routePreviewBeadID, deps.CityPath, deps.CityName, a, deps.Cfg.Rigs)
+		routeCmd, _ := sling.BuildSlingCommandForAgent("sling_query", a.EffectiveSlingQuery(), previewBeadID, deps.CityPath, deps.CityName, a, deps.Cfg.Rigs)
 		w("Route command (not executed):")
 		w("  " + routeCmd)
-		if attachingFormula {
-			w("  The wisp root bead (not the work bead) is routed to the agent.")
-		} else if !sling.IsCustomSlingQuery(a) {
+		if !sling.IsCustomSlingQuery(a) {
 			if a.SupportsInstanceExpansion() {
 				w("  This routes the bead to session config \"" + a.QualifiedName() + "\".")
 			} else {
 				w("  This assigns the bead to \"" + a.QualifiedName() + "\".")
 			}
+		}
+		if attachingFormula {
+			w("  A wisp/workflow root is also cooked and routed to the agent.")
 		}
 		w("")
 	}

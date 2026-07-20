@@ -268,7 +268,7 @@ func shouldCheckBeadState(opts SlingOpts) bool {
 // prove the bead is unmoleculed, so it must preserve the fail-closed idempotent
 // state rather than clear it and risk minting a duplicate attachment.
 func onFormulaNeedsAttachment(opts SlingOpts, querier BeadQuerier, deps SlingDeps) (bool, error) {
-	if opts.OnFormula == "" {
+	if !usesFormulaBackedRoute(opts) {
 		return false, nil
 	}
 	hasMolecule, err := HasMoleculeChildren(querier, opts.BeadOrFormula, deps.Store)
@@ -447,8 +447,17 @@ func attachFormulaToBead(opts SlingOpts, deps SlingDeps, querier BeadQuerier, be
 				if rollbackErr := rollbackGraphV2ReplacementLaunch(deps.Store, mResult.RootID, replacedSnapshot); rollbackErr != nil {
 					return wfResult, errors.Join(wfErr, rollbackErr)
 				}
+				return wfResult, wfErr
 			}
-			return wfResult, wfErr
+			// Convoy-first graph.v2 attach deliberately passes sourceBeadID=""
+			// above (the source is tracked via the input convoy, not
+			// gc.source_bead_id/workflow_id), so doStartGraphWorkflow's own
+			// restamp does not fire here. Do it explicitly: the work bead's
+			// gc.routed_to must still become the single source of truth.
+			if err := restampWorkBeadRouting(deps, beadID, a); err != nil {
+				return wfResult, err
+			}
+			return wfResult, nil
 		})
 	}
 	if err := validateSlingFormulaRuntimeVars(context.Background(), formulaName, searchPaths, molecule.Options{
@@ -641,6 +650,23 @@ func validateBuiltInRouteStoreReachable(deps SlingDeps, beadID string, a config.
 	}
 }
 
+// restampWorkBeadRouting sets gc.routed_to on the work bead to the resolved
+// agent target. It is the single source of truth the pool claim path reads
+// (ruling on ra-jduft): every attach path (--on, default-formula) must keep it
+// current, mirroring what slingPlainBead's finalize() already does for the
+// --no-formula path, in addition to whatever routing the cooked wisp/workflow
+// root separately carries.
+func restampWorkBeadRouting(deps SlingDeps, beadID string, a config.Agent) error {
+	routedTo := a.QualifiedName()
+	if deps.Cfg != nil {
+		routedTo = agentutil.NormalizePoolRouteTarget(deps.Cfg, routedTo)
+	}
+	if err := deps.Store.SetMetadata(beadID, beadmeta.RoutedToMetadataKey, routedTo); err != nil {
+		return fmt.Errorf("setting gc.routed_to on %s: %w", beadID, err)
+	}
+	return nil
+}
+
 // doStartGraphWorkflow performs post-instantiation graph workflow setup.
 func doStartGraphWorkflow(rootID, sourceBeadID string, a config.Agent, method string, deps SlingDeps) (SlingResult, error) {
 	var result SlingResult
@@ -670,6 +696,13 @@ func doStartGraphWorkflow(rootID, sourceBeadID string, a config.Agent, method st
 		// witness/source lookups resume from the workflow currently in control.
 		if err := deps.Store.SetMetadata(sourceBeadID, "workflow_id", rootID); err != nil {
 			return result, fmt.Errorf("setting workflow_id on %s: %w", sourceBeadID, err)
+		}
+		// The work bead's gc.routed_to is the single source of truth the pool
+		// claim path reads (ruling on ra-jduft); the attach path must keep it
+		// current the same way slingPlainBead's finalize() does, even though
+		// the cooked workflow root carries its own gc.routed_to too.
+		if err := restampWorkBeadRouting(deps, sourceBeadID, a); err != nil {
+			return result, err
 		}
 	}
 	telemetry.RecordSling(context.Background(), a.QualifiedName(), TargetType(&a), method, nil)

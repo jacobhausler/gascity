@@ -4387,6 +4387,11 @@ title = "Do work"
 	if got := parent.Metadata["workflow_id"]; got != "" {
 		t.Fatalf("parent workflow_id = %q, want empty for convoy-first graph.v2", got)
 	}
+	// ra-jduft ruling: the work bead's gc.routed_to is the single source of
+	// truth the pool claim path reads, so the attach path must restamp it.
+	if got := parent.Metadata["gc.routed_to"]; got != "mayor" {
+		t.Fatalf("parent gc.routed_to = %q, want mayor", got)
+	}
 	inputConvoys, err := deps.Store.List(beads.ListQuery{Type: "convoy"})
 	if err != nil {
 		t.Fatalf("list input convoys: %v", err)
@@ -4590,6 +4595,19 @@ title = "Do work"
 	}
 	if got := child.Metadata["workflow_id"]; got != "" {
 		t.Fatalf("child workflow_id = %q, want empty; convoy is graph.v2 input", got)
+	}
+	if got := child.Metadata["gc.routed_to"]; got != "" {
+		t.Fatalf("child gc.routed_to = %q, want empty; the convoy is the work bead here, not its member", got)
+	}
+	// ra-jduft ruling: the work bead here is the CONVOY (CVY-1 is what was
+	// slung; BL-1 is only a tracked member of its graph.v2 input), so the
+	// restamp lands on the convoy, not the child.
+	convoyAfter, err := deps.Store.Get("CVY-1")
+	if err != nil {
+		t.Fatalf("Get(CVY-1): %v", err)
+	}
+	if got := convoyAfter.Metadata["gc.routed_to"]; got != "mayor" {
+		t.Fatalf("convoy gc.routed_to = %q, want mayor", got)
 	}
 	roots, err := deps.Store.ListByMetadata(map[string]string{"gc.input_convoy_id": "CVY-1", "gc.kind": "workflow"}, 1)
 	if err != nil {
@@ -6308,11 +6326,14 @@ func TestDryRunOnFormula(t *testing.T) {
 	if !strings.Contains(out, "Pre-check: BL-42 has no existing molecule/wisp children") {
 		t.Errorf("stdout missing pre-check: %s", out)
 	}
-	if !strings.Contains(out, "bd update '<wisp-root>' --set-metadata gc.routed_to=mayor") {
+	if !strings.Contains(out, "bd update 'BL-42' --set-metadata gc.routed_to=mayor") {
 		t.Errorf("stdout missing route command: %s", out)
 	}
-	if !strings.Contains(out, "The wisp root bead (not the work bead) is routed to the agent.") {
-		t.Errorf("stdout missing wisp-root clarification: %s", out)
+	if !strings.Contains(out, "This assigns the bead to \"mayor\".") {
+		t.Errorf("stdout missing work-bead assignment line: %s", out)
+	}
+	if !strings.Contains(out, "A wisp/workflow root is also cooked and routed to the agent.") {
+		t.Errorf("stdout missing wisp-root disclosure: %s", out)
 	}
 	if len(runner.calls) != 0 {
 		t.Errorf("got %d runner calls, want 0: %v", len(runner.calls), runner.calls)
@@ -6518,8 +6539,11 @@ func TestDryRunLeafTaskViaBatchDispatchOnFormula(t *testing.T) {
 	if !strings.Contains(out, "Would run: gc formula cook code-review --attach BL-42") {
 		t.Errorf("stdout missing cook command: %s", out)
 	}
-	if !strings.Contains(out, "bd update '<wisp-root>' --set-metadata gc.routed_to=hw/polecat") {
+	if !strings.Contains(out, "bd update 'BL-42' --set-metadata gc.routed_to=hw/polecat") {
 		t.Errorf("stdout missing route command: %s", out)
+	}
+	if !strings.Contains(out, "A wisp/workflow root is also cooked and routed to the agent.") {
+		t.Errorf("stdout missing wisp-root disclosure: %s", out)
 	}
 	if !strings.Contains(out, "No side effects executed (--dry-run).") {
 		t.Errorf("stdout missing footer: %s", out)
