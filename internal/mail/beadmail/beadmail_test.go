@@ -1673,6 +1673,77 @@ func TestReplyPrefersStoredSenderSessionID(t *testing.T) {
 	}
 }
 
+// TestReplySelfReplyRoutesToOtherParty guards against replying to your own
+// sent mail self-addressing the reply: it must route to the thread's other
+// party (the original recipient) instead. See ra-wi2g9.
+func TestReplySelfReplyRoutesToOtherParty(t *testing.T) {
+	store := beads.NewMemStore()
+	p := New(store)
+
+	sender, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias":        "gascity/workflows.codex-min-9",
+			"session_name": "workflows__codex-min-mc-sender",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create sender session: %v", err)
+	}
+	if _, err := store.Create(beads.Bead{
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession},
+		Metadata: map[string]string{
+			"alias":        "gascity/workflows.codex-min-10",
+			"session_name": "workflows__codex-min-mc-responder",
+		},
+	}); err != nil {
+		t.Fatalf("Create responder session: %v", err)
+	}
+	original, err := store.Create(beads.Bead{
+		Title:       "Status",
+		Description: "here is the status",
+		Type:        "message",
+		Assignee:    "gascity/workflows.codex-min-10",
+		From:        "gascity/workflows.codex-min-9",
+		Labels:      []string{"thread:self-reply-route"},
+		Metadata: map[string]string{
+			fromSessionIDMetadataKey: sender.ID,
+			fromDisplayMetadataKey:   "gascity/workflows.codex-min-9",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create original message: %v", err)
+	}
+
+	// Reply as the ORIGINAL SENDER — a self-reply on your own sent mail.
+	reply, err := p.Reply(original.ID, "gascity/workflows.codex-min-9", "RE: Status", "follow-up")
+	if err != nil {
+		t.Fatalf("Reply: %v", err)
+	}
+
+	if reply.To != "gascity/workflows.codex-min-10" {
+		t.Fatalf("self-reply To = %q, want %q (original recipient, not self)", reply.To, "gascity/workflows.codex-min-10")
+	}
+	if reply.To == "gascity/workflows.codex-min-9" {
+		t.Fatalf("self-reply addressed the replier (self-mail): To = %q", reply.To)
+	}
+	if reply.From != "gascity/workflows.codex-min-9" {
+		t.Fatalf("self-reply From = %q, want %q", reply.From, "gascity/workflows.codex-min-9")
+	}
+
+	// A non-self reply (the other party replying back) must still target
+	// the original sender, unchanged.
+	reply2, err := p.Reply(original.ID, "gascity/workflows.codex-min-10", "RE: Status", "ack")
+	if err != nil {
+		t.Fatalf("Reply (other party): %v", err)
+	}
+	if reply2.To != "gascity/workflows.codex-min-9" {
+		t.Fatalf("non-self reply To = %q, want %q (original sender)", reply2.To, "gascity/workflows.codex-min-9")
+	}
+}
+
 func TestReplyToClosedSenderSessionIsDiscoverableByHistoricalAlias(t *testing.T) {
 	store := beads.NewMemStore()
 	p := New(store)

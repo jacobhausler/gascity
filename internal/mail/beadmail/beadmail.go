@@ -549,7 +549,8 @@ func (p *Provider) Reply(id, from, subject, body string) (mail.Message, error) {
 	if isRemovedMessageBead(original) {
 		return mail.Message{}, beadmailError("reply", beads.ErrNotFound)
 	}
-	toSessionID := strings.TrimSpace(original.Metadata[fromSessionIDMetadataKey])
+	origFromSessionID := strings.TrimSpace(original.Metadata[fromSessionIDMetadataKey])
+	toSessionID := origFromSessionID
 	to := toSessionID
 	if to == "" {
 		to = strings.TrimSpace(original.From)
@@ -565,6 +566,33 @@ func (p *Provider) Reply(id, from, subject, body string) (mail.Message, error) {
 	if err != nil {
 		return mail.Message{}, fmt.Errorf("beadmail reply: %w", err)
 	}
+
+	// Self-reply: the replier is the original message's own sender (compared
+	// at the resolved session-id layer, since `from` may be a bare name while
+	// original.From is a display string). Route to the thread's OTHER party —
+	// the original recipient — instead of back to the replier; otherwise a
+	// reply to your own sent mail addresses yourself.
+	replierSessionID := ""
+	if metadata != nil {
+		replierSessionID = metadata[fromSessionIDMetadataKey]
+	}
+	if replierSessionID != "" && origFromSessionID != "" && replierSessionID == origFromSessionID {
+		otherSessionID := strings.TrimSpace(original.Metadata[toSessionIDMetadataKey])
+		otherTo := otherSessionID
+		if otherTo == "" {
+			otherTo = strings.TrimSpace(original.Assignee)
+		}
+		if otherTo == "" {
+			return mail.Message{}, fmt.Errorf("beadmail reply: original message %s is a self-reply with no other party to reply to", id)
+		}
+		to = otherTo
+		toSessionID = otherSessionID
+		toDisplay = strings.TrimSpace(original.Metadata[toDisplayMetadataKey])
+		if toDisplay == "" {
+			toDisplay = strings.TrimSpace(original.Assignee)
+		}
+	}
+
 	if metadata == nil {
 		metadata = make(map[string]string)
 	}
