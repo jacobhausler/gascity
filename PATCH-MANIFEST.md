@@ -1,4 +1,4 @@
-# Patch manifest — patched local `gc` candidate `ra.2`
+# Patch manifest — patched local `gc` candidates (current: `ra.5`)
 
 Per moiraine's manifest ruling (2026-07-19 14:1xZ, on `ra-ol9b7`): the candidate carries
 a committed manifest enumerating every local patch in the build, **plus an explicit
@@ -6,10 +6,159 @@ DEFERRED list**, so that exclusion is always a statement and never a silence. si
 adoption gate cross-checks this file against the branches registered on `ra-ol9b7`; an
 unlisted registered branch FAILS verification.
 
-Assembled by perrin, 2026-07-19. This file is local to our patched builds and must
-**never** be included in an upstream PR.
+This file is local to our patched builds and must **never** be included in an upstream PR.
 
 ---
+
+## ⚠ THIS MANIFEST WENT STALE FOR TWO CANDIDATES — read before trusting any older copy
+
+Stated first because it is the fact most likely to mislead a reader who checks out an
+older tag. `PATCH-MANIFEST.md` was last written for `ra.2` (commit `1f7d945b0`,
+2026-07-19) and **was not updated when `ra.3` or `ra.4` were cut**. Both of those
+candidates were tagged, built and flipped onto the live `gc` carrying a manifest whose
+title, identity table and INCLUDED list describe a *different, earlier* build — naming
+2 local patches where `ra.4` in fact carries 9.
+
+Consequences worth knowing, because "the file exists and looks complete" is exactly how
+this hid:
+
+- The `ra.3` tag (`candidate/ra.3/build-2eb9930cb`) and the `ra.4` tag
+  (`candidate/ra.4/build-730c9b2e0`) both contain the **ra.2** manifest. The tags are
+  immutable and are NOT being re-cut to fix documentation — the binary must not change
+  for a doc edit. So the manifest that describes `ra.4` is *this* commit, which sits one
+  commit **after** the `ra.4` tag. Cite the tag for the artifact; cite this file for what
+  is in it.
+- siuan's adoption gate cross-checks this file against the branches registered on
+  `ra-ol9b7`. For two candidates that cross-check was reading stale content — it could
+  only ever have compared against `ra.2`'s patch set.
+- Same defect class as `ra-6fv78`: the cut procedure verified **provenance** (revision,
+  `vcs.modified`, tag, gates) and nothing about whether the candidate's own paperwork
+  described the candidate. `gc-cut.sh` did not check it, so nothing failed. Tracked as a
+  gate fix on the cut script (see the bead referenced from `ra-kbk3v`).
+- **An `ra.3` manifest was in fact written — it just never reached git.**
+  `/Users/home/.local/gc-builds/ra.3/PATCH-MANIFEST.md` is a real 94-line `ra.3` document
+  (assembled 2026-07-20 under `ra-n68rg.1`), while `git show 2eb9930cb:PATCH-MANIFEST.md`
+  is the `ra.2` one. `gc-cut.sh:243` copies whatever the tree has into the install dir, so
+  the deployed and committed copies are free to diverge and did. Net effect: for `ra.3`
+  there are two manifests and **neither is authoritative** — the deployed one is untracked
+  and reproducible from no revision, the committed one is stale. Do not read "an install
+  dir contains a manifest" as "the candidate has a manifest".
+
+---
+
+## Candidate identity — `ra.5` (CURRENT, cut; awaiting flip)
+
+| Field | Value |
+|---|---|
+| Candidate | `ra.5` |
+| Immutable tag | `candidate/ra.5/build-<short>` (annotated; peels to the built revision) — stamped by `gc-cut.sh`, pushed to FORK `github.com/jacobhausler/gascity`, never to upstream |
+| Built revision | stamped by `gc-cut.sh` in `BUILT-REVISION.txt` at cut; `vcs.modified=false` (child of `77b1c1289`, adding only this manifest) |
+| Upstream base | `ab8bb6a08` (inherited UNCHANGED from `ra.4`/`ra.3`; **not** upstream tip — do not describe this build as latest) |
+| Local patches applied | 11 functional + this manifest (`ra.4`'s 9 + the 2 close-gate commits below) |
+| Version stamp | `1.3.5+ra.5` (the `+` survives since `b8bacc8e5`) |
+| Installed at | `/Users/home/.local/gc-builds/ra.5/gc`; live via the `gc-flip.sh` symlink seam once flipped |
+| Cut by | `gascity-docs/scripts/gc-cut.sh` |
+| Predecessor | `ra.4` (`730c9b2e0`), kept on disk; rollback is a symlink flip |
+
+### DELTA from `ra.4` — the `ra-18okp` close-gate fix
+
+`ra.5` is `ra.4`'s EXACT tree plus these two commits and this manifest — no upstream commits
+injected, no other local patch changed. The change lives entirely in the session
+reconciler's close-gate path.
+
+| Commit | Bead | What it fixes |
+|---|---|---|
+| `932ec5b8a` | `ra-18okp` (attempt `ra-p37yo`) | excludes a session's OWN `mol-do-work` drain step from the close-gate assigned-work probe, opt-in per call site via an `excludeOwnDrainStep bool`; the event path at `session_reconciler.go:631` (`recordDrainAckAssignedWorkEvent`) is left UNTOUCHED so the genuinely-stranded-work signal still fires |
+| `77b1c1289` | `ra-5z6wo` | makes `932ec5b8a` actually fire in production. `isSessionOwnDrainStepBead` compared `gc.step_ref` against the bare literal `"drain"`, but the store writes it formula-qualified (`"mol-do-work.drain"`), so the predicate was false for every real drain step and the exclusion was a NO-OP. Now matches the final dot-segment; the `mol-do-work` formula pin right after already narrows the match. Test fixtures rebuilt from the real store form so they cannot pass trivially before-and-after |
+
+**Why two commits for one fix, stated because a reader will ask:** `932ec5b8a` (from
+`ra-p37yo`) shipped the right *design* but was a NO-OP in production for the string-match
+reason above; perrin's lead acceptance REJECTED it precisely for that, and `77b1c1289`
+(`ra-5z6wo`) is the corrective one-line-class fix, lead-accepted with the falsifiable floor
+re-run by perrin himself (revert the fix → ARM 2 `DrainAckOwnDrainStepClosesWithoutEvent`
+FAILS; restore → PASSES). Deploy artifact per moiraine's ruling is the pair culminating in
+`77b1c1289`, **not** `932ec5b8a` alone.
+
+### Post-cut deploy note — the L4 trap bites THIS fix hardest
+
+This fix lives in the city supervisor's OWN reconcile loop, so a symlink flip changes
+NOTHING until the supervisor restarts — the same L4 trap `ra.4`'s pool-alias fix hit at
+16:1xZ (installed and not running for 100 minutes). The flip **and** supervisor restart are
+a maintenance-window action coordinated by moiraine (both disrupt live sessions). Acceptance
+(`exactly-once-per-stop-pending` behavioural, `ra-t9mpj` step 3) CANNOT be read until the
+supervisor runs the new image — verified by `go version -m $(which gc)` showing a revision
+`!= 730c9b2e0a99` AND `lsof -p <supervisor-pid> | awk '$4=="txt"'` showing the `ra.5` image —
+and needs a deliberately-spawned live pool subject (a quiet city is a zero denominator, not
+a pass).
+
+---
+
+## Candidate identity — `ra.4` (predecessor — superseded by `ra.5`)
+
+| Field | Value |
+|---|---|
+| Candidate | `ra.4` |
+| Immutable tag | `candidate/ra.4/build-730c9b2e0` (annotated; peels to the built revision) — pushed to FORK `github.com/jacobhausler/gascity`, never to upstream |
+| Built revision | `730c9b2e0a99e29dc9aefc1ec58b14d8da1b36ef`, `vcs.modified=false` |
+| Upstream base | `ab8bb6a08` (inherited from `ra.3`; **not** upstream tip — do not describe this build as latest) |
+| Local patches applied | 9 functional + this manifest (below) |
+| Version stamp | `1.3.5+ra.4` (the `+` survives since `b8bacc8e5`) |
+| Installed at | `/Users/home/.local/gc-builds/ra.4/gc`; live via the `gc-flip.sh` symlink seam |
+| Cut by | `gascity-docs/scripts/gc-cut.sh` — the first candidate cut by script rather than by hand |
+| Predecessor | `ra.3` (`2eb9930cb`), kept on disk; rollback is a symlink flip |
+
+### INCLUDED — the full local stack in `ra.4`, oldest first
+
+`git log --oneline ab8bb6a08..730c9b2e0` in a tree at the tag reproduces exactly this list.
+
+| Commit | Bead | What it fixes |
+|---|---|---|
+| `4344c0af2` | `ra-m5y6t` (upstream filing `ra-fte82`) | `gc doctor` bd-backup-freshness reads the active backup pipeline's state — detailed in the ra.2 section below |
+| `430631874` | `ra-fwllb` | first pool-alias livelock backoff (session_beads.go write site) — detailed in the ra.2 section below |
+| `1f7d945b0` | — | the ra.2 manifest commit (this file's ancestor) |
+| `b8bacc8e5` | `ra-8zop6` | `normalizeVersion` preserves SemVer build metadata, so `1.3.5+ra.N` stops being erased |
+| `4a6fe9753` | — | `gc sling` dry-run route preview names the wisp root, not the work bead |
+| `2eb9930cb` | — | `gc sling` restamps the work bead on formula-attach (**ra.3's tip**) |
+| `840537681` | `ra-60910` | clears the two lint-red findings our own patch queue authored (misspell + staticcheck S1017) |
+| `b80604b96` | `ra-uu78e` | gates the **second** unguarded pool-alias-conflict write site (`build_desired_state_pool_info.go`) through the same `deferredSingletonAliasRetryDue` predicate — the half `430631874` missed |
+| `8d9a6296a` | `ra-od3o5` | strips the monotonic clock reading before convoy keyset-pagination comparisons (measured 1 failure / 200 runs on an idle box) |
+| `08f0c0279` | `ra-625fy` | hook discovery no longer starves rig-routed work under first-store-wins |
+| `730c9b2e0` | `ra-625fy` | lint fix for the patch immediately above — three `behaviour` misspellings it introduced |
+
+**The last row is the cut gate earning its existence on first use.** `gc-cut.sh` REFUSED
+the first `ra.4` attempt: it re-ran the lint gate on base `2eb9930cb`, found those three
+misspellings absent there, attributed them to us rather than to upstream noise, and
+blocked — naming exactly those three. Without it they would have shipped, and would have
+bounced the `ra-625fy` upstream PR on style. **Note for whoever raises that PR:** the fix
+lives only in `ra.4`; the source branch `fix/hook-cross-store-priority` still carries the
+misspellings at `e545cb9f4`.
+
+### DEFERRED from `ra.4` — deliberate exclusions
+
+| Item | Bead | Why not included |
+|---|---|---|
+| Cancellation / rollback fix | `ra-q0h1k` | Validated, but exists only as **text** in a closed bead's notes — never committed. Adding a late, uncommitted patch to an otherwise-ready cut is how a cut slips. Scoped to the candidate *after* `ra.4`. |
+
+The `ra.2` DEFERRED table further down still applies except where a row above supersedes it.
+
+### Post-cut deploy note — a symlink flip is not a deploy
+
+`ra.4` went live on the symlink at 2026-07-20 16:1xZ and the pool-alias counter kept
+climbing, because **a symlink flip does not touch a running process**. Both patched write
+sites execute inside the city supervisor's reconcile loop, so the fix was installed and
+not running until the supervisor was restarted (17:57:15Z). Read the running image from
+the process TEXT segment (`lsof -p PID | awk '$4=="txt"'`), never from `argv` — `argv`
+says `/opt/homebrew/bin/gc` either way and tells you nothing. `gc-flip.sh` now prints the
+L4 holders at every flip (commit `5b66d15`).
+
+---
+
+# HISTORY — candidate `ra.2` (superseded; retained for its analysis)
+
+Everything below was written for `ra.2` on 2026-07-19 and is kept because its per-patch
+verification notes, the `normalizeVersion` defect writeup and the adoption-gate disclosure
+are still the best record of those patches. **Its identity table and INCLUDED list are NOT
+the current build** — use the `ra.4` section above for that.
 
 ## Candidate identity
 
