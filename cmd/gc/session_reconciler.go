@@ -3895,15 +3895,24 @@ func hasNonSessionNonOwnDrainStepWork(store beads.Store, items []beads.Bead) boo
 }
 
 // isSessionOwnDrainStepBead reports whether item is a mol-do-work "drain" step
-// bead: gc.step_ref == "drain" AND its molecule root (gc.root_bead_id) was
-// compiled from the mol-do-work formula. Narrow and named per ra-p37yo's scope —
-// it must not match any other step, including one that happens to reuse the
-// literal step id "drain" in an unrelated formula. The identifiers-scoped
-// assignee filter upstream already guarantees any matching item is assigned to
-// THIS session, so no separate "is this session's own molecule" check is needed
-// beyond confirming the step/formula shape itself.
+// bead: gc.step_ref's final dot-separated segment is "drain" AND its molecule
+// root (gc.root_bead_id) was compiled from the mol-do-work formula. The store
+// writes gc.step_ref formula-qualified (e.g. "mol-do-work.drain"), never the
+// bare step id, so the match is on the LAST segment, not the whole string —
+// see ra-5z6wo. The formula pin below already narrows to mol-do-work, so this
+// segment check only has to identify "this is the drain step", not re-pin the
+// formula itself. Narrow and named per ra-p37yo's scope — it must not match
+// any other step, including one that happens to reuse the literal step id
+// "drain" in an unrelated formula. The identifiers-scoped assignee filter
+// upstream already guarantees any matching item is assigned to THIS session,
+// so no separate "is this session's own molecule" check is needed beyond
+// confirming the step/formula shape itself.
 func isSessionOwnDrainStepBead(store beads.Store, item beads.Bead) bool {
-	if strings.TrimSpace(item.Metadata[beadmeta.StepRefMetadataKey]) != "drain" {
+	stepRef := strings.TrimSpace(item.Metadata[beadmeta.StepRefMetadataKey])
+	if idx := strings.LastIndex(stepRef, "."); idx >= 0 {
+		stepRef = stepRef[idx+1:]
+	}
+	if stepRef != "drain" {
 		return false
 	}
 	rootID := strings.TrimSpace(item.Metadata[beadmeta.RootBeadIDMetadataKey])

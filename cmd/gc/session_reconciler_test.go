@@ -1660,7 +1660,10 @@ func TestReconcileSessionBeads_DrainAckOwnDrainStepClosesWithoutEvent(t *testing
 		Status:   "in_progress",
 		Assignee: session.ID,
 		Metadata: map[string]string{
-			beadmeta.StepRefMetadataKey:    "drain",
+			// Formula-qualified, matching what the live store actually writes
+			// (see ra-5z6wo) — a bare "drain" fixture would pass before and
+			// after the fix and prove nothing.
+			beadmeta.StepRefMetadataKey:    "mol-do-work.drain",
 			beadmeta.RootBeadIDMetadataKey: root.ID,
 		},
 	})
@@ -1761,7 +1764,7 @@ func TestReconcileSessionBeads_DrainAckStepNamedDrainInOtherFormulaStillBlocksCl
 		Status:   "in_progress",
 		Assignee: session.ID,
 		Metadata: map[string]string{
-			beadmeta.StepRefMetadataKey:    "drain",
+			beadmeta.StepRefMetadataKey:    "some-other-formula.drain",
 			beadmeta.RootBeadIDMetadataKey: root.ID,
 		},
 	})
