@@ -68,7 +68,6 @@ func openProductMetricsTesthookService() (*productmetrics.Service, error) {
 	}
 	// Keep the tagged process contract independent of scheduler time spent
 	// inside RecordOnce's production 50 ms best-effort decision window.
-	now := time.Now()
 	return productmetrics.OpenTesthook(productmetrics.TesthookOptions{
 		Home:           gchome.ResolveReadOnly(),
 		ReleaseVersion: taggedProductMetricsReleaseVersion,
@@ -76,12 +75,19 @@ func openProductMetricsTesthookService() (*productmetrics.Service, error) {
 		NoticeVersion:  1,
 		NoticeText:     []byte("Gas City product metrics test-only notice."),
 		Endpoint:       endpoint,
-		Now:            func() time.Time { return now },
+		Now:            frozenProductMetricsTesthookClock(time.Now),
 		Client: &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			RootCAs:    roots,
 		}}},
 	})
+}
+
+func frozenProductMetricsTesthookClock(source func() time.Time) func() time.Time {
+	// Deadline expiry has focused unit coverage. Process contracts freeze time
+	// so runner load cannot turn their privacy and startup assertions into drops.
+	instant := source()
+	return func() time.Time { return instant }
 }
 
 func validateProductMetricsTesthookEndpoint(raw string) error {

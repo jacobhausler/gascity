@@ -80,6 +80,19 @@ func TestProductMetricsTesthookCAReadIsBounded(t *testing.T) {
 }
 
 func TestProductMetricsTaggedProcessFixtureIsEnabled(t *testing.T) {
+	t.Run("decision clock is frozen", func(t *testing.T) {
+		calls := 0
+		source := func() time.Time {
+			calls++
+			return time.Unix(int64(calls), 0)
+		}
+		clock := frozenProductMetricsTesthookClock(source)
+		first, second := clock(), clock()
+		if first != second || calls != 1 {
+			t.Fatalf("frozen clock = (%s, %s), source calls = %d; want equal instants from one source call", first, second, calls)
+		}
+	})
+
 	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
 		configureProductMetricsTrustedProcessTempRoot(t)
 	}
