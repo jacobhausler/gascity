@@ -1316,7 +1316,7 @@ func launchOrchestration(ctx context.Context, ops startOps, name string, cfg run
 		return err
 	}
 	if cfg.Nudge != "" {
-		if err := ops.sendKeys(name, cfg.Nudge); err != nil {
+		if err := sendStartupNudgeWithRetry(func() error { return ops.sendKeys(name, cfg.Nudge) }, time.Sleep); err != nil {
 			return fmt.Errorf("sending startup nudge: %w", err)
 		}
 	}
@@ -1328,6 +1328,34 @@ func launchOrchestration(ctx context.Context, ops startOps, name string, cfg run
 	runSessionLive(ctx, ops, name, cfg, os.Stderr, setupTimeout)
 
 	return nil
+}
+
+// startupNudgeRetryBackoffs are the delays between resend attempts when the
+// startup nudge comes back ErrNudgeSubmitUnconfirmed. Proven empirically: a
+// submit injected right after readiness is observed (~0.3s into a booting
+// claude TUI) sits unconfirmed, while the same injection ~6s later lands —
+// readiness detection and the TUI actually accepting input are not the same
+// moment. A var (not a const) so tests can shrink it.
+var startupNudgeRetryBackoffs = []time.Duration{2 * time.Second, 4 * time.Second, 6 * time.Second, 8 * time.Second}
+
+// sendStartupNudgeWithRetry calls send (a full clear+paste+submit cycle, e.g.
+// ops.sendKeys) and, if it reports ErrNudgeSubmitUnconfirmed, waits out a
+// backoff and calls send again — re-running the whole cycle re-pastes the
+// nudge text, which self-heals a draft the still-booting TUI cleared or
+// redrew. Any other error, or exhausting the backoffs, returns immediately so
+// a healthy fast boot never pays this cost.
+func sendStartupNudgeWithRetry(send func() error, sleep func(time.Duration)) error {
+	var err error
+	for attempt := 0; ; attempt++ {
+		err = send()
+		if err == nil || !errors.Is(err, ErrNudgeSubmitUnconfirmed) {
+			return err
+		}
+		if attempt >= len(startupNudgeRetryBackoffs) {
+			return err
+		}
+		sleep(startupNudgeRetryBackoffs[attempt])
+	}
 }
 
 // runSessionSetup runs session_setup commands then session_setup_script.
