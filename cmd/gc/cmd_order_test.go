@@ -4027,10 +4027,12 @@ func TestOrderCheckCooldownStaleEventFallsThroughToLastRunStore(t *testing.T) {
 	}
 }
 
-// TestOrderSweepTrackingRequiresConfirm verifies that cmdOrderSweepTrackingWithOptions
-// returns exit 1 with a descriptive message when the number of eligible deletions
-// exceeds GC_BULK_DELETE_CONFIRM_THRESHOLD and confirm=false.
-func TestOrderSweepTrackingRequiresConfirm(t *testing.T) {
+// TestOrderSweepTrackingUnconfirmedBoundsDeletionsToThreshold verifies that
+// cmdOrderSweepTrackingWithOptions, when eligible deletions exceed
+// GC_BULK_DELETE_CONFIRM_THRESHOLD and confirm=false, does not block outright —
+// it deletes up to the threshold and exits 0, so a scheduled caller without
+// --confirm converges a backlog over successive ticks instead of stalling.
+func TestOrderSweepTrackingUnconfirmedBoundsDeletionsToThreshold(t *testing.T) {
 	t.Setenv("GC_BEADS", "file")
 	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
 	// Set threshold low (1) so a single eligible retention bead triggers the guard.
@@ -4095,20 +4097,16 @@ prefix = "ct"
 	}
 
 	var stdout, stderr bytes.Buffer
-	// confirm=false: should return 1 and print descriptive message.
+	// confirm=false, threshold=1: should return 0 and delete exactly 1 (the
+	// threshold), leaving the rest of the backlog for the next tick.
 	code := cmdOrderSweepTrackingWithOptions(time.Nanosecond, false, false, false, false, nil, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("cmdOrderSweepTrackingWithOptions (no confirm) = %d, want 1; stderr: %s stdout: %s", code, stderr.String(), stdout.String())
+	if code != 0 {
+		t.Fatalf("cmdOrderSweepTrackingWithOptions (no confirm) = %d, want 0; stderr: %s stdout: %s", code, stderr.String(), stdout.String())
 	}
-	got := stderr.String()
-	if !strings.Contains(got, "confirm") {
-		t.Fatalf("stderr = %q, want '--confirm' hint in message", got)
+	got := stdout.String()
+	if !strings.Contains(got, "deleted 1 closed order-tracking bead(s)") {
+		t.Fatalf("stdout = %q, want exactly 1 deletion (the threshold budget)", got)
 	}
-	if !strings.Contains(got, "GC_BULK_DELETE_CONFIRM_THRESHOLD") {
-		t.Fatalf("stderr = %q, want GC_BULK_DELETE_CONFIRM_THRESHOLD in message", got)
-	}
-	// The gate blocks the retention deletions only. Stale-close ran first and
-	// its work is durable even though the command exits 1.
 	reopened, err := openStoreAtForCity(cityDir, cityDir)
 	if err != nil {
 		t.Fatalf("openStoreAtForCity: %v", err)
@@ -4118,23 +4116,26 @@ prefix = "ct"
 		t.Fatalf("Get(%s): %v", openID, err)
 	}
 	if openBead.Status != "closed" {
-		t.Fatalf("%s status = %q, want closed — a tripped confirm gate must not suppress stale-close", openID, openBead.Status)
+		t.Fatalf("%s status = %q, want closed", openID, openBead.Status)
 	}
-	// ...and nothing was deleted.
-	for i := range n {
-		id := fmt.Sprintf("sg-%02d", i)
-		if _, err := reopened.Get(id); err != nil {
-			t.Fatalf("%s should survive a tripped confirm gate: %v", id, err)
+	// Exactly one of the 2 eligible beads (sg-00, sg-01) is deleted this tick —
+	// the threshold=1 budget, not the full eligible backlog.
+	survivors := 0
+	for _, id := range []string{"sg-00", "sg-01"} {
+		if _, err := reopened.Get(id); err == nil {
+			survivors++
 		}
+	}
+	if survivors != 1 {
+		t.Fatalf("survivors among sg-00/sg-01 = %d, want 1 (threshold=1 budget deletes exactly one)", survivors)
 	}
 }
 
-// TestOrderSweepTrackingConfirmGateFailsClosedOnCountError verifies that when
-// countClosedOrderTrackingRetentionEligible fails (store read error), the confirm
-// gate returns exit 1 with a descriptive message rather than proceeding unguarded.
-func TestOrderSweepTrackingConfirmGateFailsClosedOnCountError(t *testing.T) {
-	// A failing exec script makes store.List() return an error, exercising the
-	// countErr != nil fail-closed path without requiring a real beads provider.
+// TestOrderSweepTrackingFailsClosedOnStoreReadError verifies that a store read
+// error during the retention sweep returns exit 1 with a descriptive message
+// rather than proceeding unguarded, whether or not --confirm is passed.
+func TestOrderSweepTrackingFailsClosedOnStoreReadError(t *testing.T) {
+	// A failing exec script makes store.List() return an error.
 	failScript := filepath.Join(t.TempDir(), "gc-beads-fail")
 	if err := os.WriteFile(failScript, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatalf("write fail script: %v", err)
@@ -4161,20 +4162,61 @@ prefix = "ct"
 	var stdout, stderr bytes.Buffer
 	code := cmdOrderSweepTrackingWithOptions(time.Nanosecond, false, false, false, false, nil, &stdout, &stderr)
 	if code != 1 {
-		t.Fatalf("cmdOrderSweepTrackingWithOptions (count error) = %d, want 1; stderr: %s stdout: %s", code, stderr.String(), stdout.String())
+		t.Fatalf("cmdOrderSweepTrackingWithOptions (store read error) = %d, want 1; stderr: %s stdout: %s", code, stderr.String(), stdout.String())
 	}
 	got := stderr.String()
-	if !strings.Contains(got, "cannot count eligible beads for confirm gate") {
-		t.Fatalf("stderr = %q, want 'cannot count eligible beads for confirm gate' in message", got)
+	if !strings.Contains(got, "listing closed order-tracking beads") {
+		t.Fatalf("stderr = %q, want 'listing closed order-tracking beads' in message", got)
 	}
 }
 
-// TestPackagedOrderTrackingSweepPassesConfirm pins the packaged core sweep
-// order to --confirm. The order runs unattended every minute, so without the
-// flag the bulk-delete gate fails it on every tick once the backlog passes the
-// threshold — and takes stale-close down with it. Nothing else would catch a
-// regression here until a city's tracking backlog stopped draining.
-func TestPackagedOrderTrackingSweepPassesConfirm(t *testing.T) {
+// TestOrderSweepTrackingConfirmFailsClosedOnCountError verifies that with
+// --confirm, a countClosedOrderTrackingRetentionEligible failure (store read
+// error) aborts with a descriptive message rather than proceeding unguarded —
+// --confirm resolves its unbounded budget via that count, so a failed count
+// must not silently fall back to an unbounded sweep.
+func TestOrderSweepTrackingConfirmFailsClosedOnCountError(t *testing.T) {
+	failScript := filepath.Join(t.TempDir(), "gc-beads-fail")
+	if err := os.WriteFile(failScript, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write fail script: %v", err)
+	}
+	t.Setenv("GC_BEADS", "exec:"+failScript)
+	t.Setenv("GC_BEADS_SCOPE_ROOT", "")
+
+	cityDir := t.TempDir()
+	t.Setenv("GC_CITY", cityDir)
+	t.Setenv("GC_CITY_PATH", cityDir)
+	t.Setenv("GC_CITY_ROOT", cityDir)
+	t.Setenv("GC_RIG", "")
+	t.Setenv("GC_RIG_ROOT", "")
+	t.Chdir(cityDir)
+
+	writeFile(t, filepath.Join(cityDir, "city.toml"), `[workspace]
+name = "test-city"
+prefix = "ct"
+`)
+	if err := ensureScopedFileStoreLayout(cityDir); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := cmdOrderSweepTrackingWithOptions(time.Nanosecond, false, false, false, true, nil, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("cmdOrderSweepTrackingWithOptions (confirm, count error) = %d, want 1; stderr: %s stdout: %s", code, stderr.String(), stdout.String())
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "cannot count eligible beads for --confirm") {
+		t.Fatalf("stderr = %q, want 'cannot count eligible beads for --confirm' in message", got)
+	}
+}
+
+// TestPackagedOrderTrackingSweepRunsUnconfirmedBounded pins the packaged core
+// sweep order to run WITHOUT --confirm. The order runs unattended every
+// minute; retention deletion is now bounded to GC_BULK_DELETE_CONFIRM_THRESHOLD
+// per invocation without --confirm, so a backlog above the threshold converges
+// over successive ticks instead of blocking the order outright on every run
+// (the defect --confirm previously had to work around).
+func TestPackagedOrderTrackingSweepRunsUnconfirmedBounded(t *testing.T) {
 	const packOrderPath = "../../internal/bootstrap/packs/core/orders/order-tracking-sweep.toml"
 	var packed struct {
 		Order struct {
@@ -4187,12 +4229,12 @@ func TestPackagedOrderTrackingSweepPassesConfirm(t *testing.T) {
 	if !strings.Contains(packed.Order.Exec, "gc order sweep-tracking") {
 		t.Fatalf("exec = %q, want a gc order sweep-tracking invocation", packed.Order.Exec)
 	}
-	if !strings.Contains(packed.Order.Exec, "--confirm") {
-		t.Fatalf("exec = %q, want --confirm so the unattended sweep clears the bulk-delete gate", packed.Order.Exec)
-	}
-	// The flag the exec line passes must still exist on the command.
-	if flag := newOrderSweepTrackingCmd(io.Discard, io.Discard).Flags().Lookup("confirm"); flag == nil {
-		t.Fatal("gc order sweep-tracking has no --confirm flag, but the packaged order passes one")
+	// The unattended sweep deliberately omits --confirm: without it, retention
+	// deletion is bounded to GC_BULK_DELETE_CONFIRM_THRESHOLD per tick rather
+	// than blocked outright, so a backlog above the threshold converges over
+	// successive ticks instead of wedging the order on every run.
+	if strings.Contains(packed.Order.Exec, "--confirm") {
+		t.Fatalf("exec = %q, want no --confirm — the scheduled path relies on the bounded per-tick budget", packed.Order.Exec)
 	}
 }
 
