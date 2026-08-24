@@ -289,18 +289,18 @@ func TestBeadListSplitCityBoundedWalkIsTheFullScanPrefix(t *testing.T) {
 	}
 }
 
-// TestBeadListDedupesBeadIDsAcrossLegs is the cross-leg identity guard. A
-// migrated split city keeps its pre-cutover infrastructure rows in the work
-// store — `gc storage migrate` copies with CreateWithForeignID (ids preserved)
-// and never deletes back — so the same bead id is genuinely resident in the
-// work store and in the binding. Without a cross-leg id gate the list arm
-// serves it twice and double-counts it, while the ready arm (which has one)
-// serves it once.
+// TestBeadListDedupesUnstampedBeadIDsAcrossLegs is the cross-leg identity guard
+// for a legacy, unstamped co-resident collision. This fixture does not model a
+// migration: there is no gc.infra_migrated_from marker. Without a cross-leg id
+// gate the list arm serves the id twice and double-counts it, while the ready
+// arm (which has one) serves it once. Stamped migration twins are covered by
+// TestAPIFederationSuppressesMigratedWorkShadows above and use graph-authority
+// semantics instead.
 //
-// Winner rule: legs are federated work-first, graph LAST, and the first leg to
-// return an id wins — identical to the ready arm, so both endpoints resolve a
-// co-resident bead to the same row.
-func TestBeadListDedupesBeadIDsAcrossLegs(t *testing.T) {
+// Winner rule for this unstamped fixture: legs are federated work-first, graph
+// LAST, and the first leg to return an id wins — identical to the ready arm, so
+// both endpoints resolve the collision to the same row.
+func TestBeadListDedupesUnstampedBeadIDsAcrossLegs(t *testing.T) {
 	fs := newFakeState(t)
 	created := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	work := beads.NewMemStoreFrom(1, []beads.Bead{{
@@ -319,7 +319,7 @@ func TestBeadListDedupesBeadIDsAcrossLegs(t *testing.T) {
 		t.Fatalf("items=%d total=%d, want 1/1 — a bead co-resident in the work store and the binding is ONE bead (items=%+v)", len(body.Items), body.Total, body.Items)
 	}
 	if body.Items[0].Title != "retained work-store copy" {
-		t.Fatalf("winning row = %q, want the work leg's copy — legs are work-first, graph last, first leg wins (same rule as GET /beads/ready)", body.Items[0].Title)
+		t.Fatalf("winning row = %q, want the work leg's copy for this unstamped collision — stamped migration twins use graph-authority semantics", body.Items[0].Title)
 	}
 
 	ready := getListBody(t, fs, "/beads/ready")
@@ -329,8 +329,8 @@ func TestBeadListDedupesBeadIDsAcrossLegs(t *testing.T) {
 }
 
 // TestBeadListDedupedWalkServesEachIDOnce pins the paging half: with every id
-// co-resident, a limit-bounded walk must serve each bead exactly once and report
-// the deduped total, not double it.
+// in this unstamped collision fixture co-resident, a limit-bounded walk must
+// serve each bead exactly once and report the deduped total, not double it.
 func TestBeadListDedupedWalkServesEachIDOnce(t *testing.T) {
 	created := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	rows := make([]beads.Bead, 0, 3)

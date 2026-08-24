@@ -496,9 +496,9 @@ func TestReadyDedupeIsFirstLegWinsForUnstampedCollision(t *testing.T) {
 	workCopy := mustCreateReadyBead(t, work, beads.Bead{Title: "retained work copy", Type: "task"})
 	forced, ok := graph.(beads.ForeignIDCreator)
 	if !ok {
-		t.Fatalf("class store %T cannot model the migration's forced foreign-id copy", graph)
+		t.Fatalf("class store %T cannot model the unstamped foreign-id collision", graph)
 	}
-	if _, err := forced.CreateWithForeignID(beads.Bead{ID: workCopy.ID, Title: "migrated graph copy", Type: "task"}); err != nil {
+	if _, err := forced.CreateWithForeignID(beads.Bead{ID: workCopy.ID, Title: "unstamped graph twin", Type: "task"}); err != nil {
 		t.Fatalf("copy %s into the class store: %v", workCopy.ID, err)
 	}
 
