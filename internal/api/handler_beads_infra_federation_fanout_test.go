@@ -52,7 +52,7 @@ func TestAPIFederationSuppressesMigratedWorkShadows(t *testing.T) {
 			if tt.graphState != "missing" {
 				metadata := map[string]string{}
 				if tt.marked {
-					metadata[beadmeta.InfraMigratedFromMetadataKey] = "work"
+					metadata[beadmeta.InfraMigratedFromMetadataKey] = config.StorageWorkBinding
 				}
 				graphRows = append(graphRows, beads.Bead{ID: workRow.ID, Type: "task", Status: tt.graphState, Title: "graph twin", Metadata: metadata})
 			}

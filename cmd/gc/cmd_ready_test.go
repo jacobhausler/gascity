@@ -533,7 +533,7 @@ func TestReadySuppressesMigratedWorkShadow(t *testing.T) {
 		Title: "closed graph twin",
 		Type:  "task",
 		Metadata: map[string]string{
-			beadmeta.InfraMigratedFromMetadataKey: "work",
+			beadmeta.InfraMigratedFromMetadataKey: config.StorageWorkBinding,
 		},
 	}); err != nil {
 		t.Fatalf("create graph twin: %v", err)
@@ -542,7 +542,7 @@ func TestReadySuppressesMigratedWorkShadow(t *testing.T) {
 		t.Fatalf("close graph twin: %v", err)
 	}
 	twin, err := graph.Get(workCopy.ID)
-	if err != nil || twin.Status != "closed" || twin.Metadata[beadmeta.InfraMigratedFromMetadataKey] != "work" {
+	if err != nil || twin.Status != "closed" || twin.Metadata[beadmeta.InfraMigratedFromMetadataKey] != config.StorageWorkBinding {
 		t.Fatalf("graph twin = status=%q metadata=%v err=%v, want migration marker", twin.Status, twin.Metadata, err)
 	}
 	rows, err := federateReadyBeads([]readyLeg{
@@ -608,7 +608,7 @@ func TestFederatedMigrationShadowRules(t *testing.T) {
 				}
 				metadata := map[string]string{}
 				if tt.marked {
-					metadata[beadmeta.InfraMigratedFromMetadataKey] = "work"
+					metadata[beadmeta.InfraMigratedFromMetadataKey] = config.StorageWorkBinding
 				}
 				if _, err := forced.CreateWithForeignID(beads.Bead{ID: workCopy.ID, Title: "graph twin", Type: "task", Metadata: metadata}); err != nil {
 					t.Fatalf("create graph twin: %v", err)
@@ -639,7 +639,7 @@ func TestFederatedMigrationShadowAppliesToListAndOwner(t *testing.T) {
 	if !ok {
 		t.Fatalf("graph store %T cannot create the migration twin", graph.Store)
 	}
-	if _, err := forced.CreateWithForeignID(beads.Bead{ID: workCopy.ID, Title: "closed graph twin", Type: "task", Metadata: map[string]string{beadmeta.InfraMigratedFromMetadataKey: "work"}}); err != nil {
+	if _, err := forced.CreateWithForeignID(beads.Bead{ID: workCopy.ID, Title: "closed graph twin", Type: "task", Metadata: map[string]string{beadmeta.InfraMigratedFromMetadataKey: config.StorageWorkBinding}}); err != nil {
 		t.Fatalf("create graph twin: %v", err)
 	}
 	if err := graph.Close(workCopy.ID); err != nil {

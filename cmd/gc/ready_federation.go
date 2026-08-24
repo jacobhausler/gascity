@@ -25,7 +25,8 @@ package main
 //     beads.SQLiteStore whose ready SQL orders by (created_at, id) with no
 //     priority term. Per-leg order is deterministic, not canonical.
 //   - Dedupe: a work row whose graph twin is explicitly stamped
-//     gc.infra_migrated_from=work is suppressed after one batched authoritative
+//     gc.infra_migrated_from=config.StorageWorkBinding is suppressed after one
+//     batched authoritative
 //     graph lookup, allowing the graph row to win (or the id to disappear when
 //     the twin is closed). For an unstamped co-resident id, the FIRST leg to
 //     return it still wins; the graph leg runs last, so the work row remains the
@@ -90,8 +91,8 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/beads/federation"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/storeref"
 )
@@ -333,7 +334,14 @@ func federateBeadLegsWithOwner(legs []readyLeg, read func(beads.Store) ([]beads.
 			workIDs = append(workIDs, b.ID)
 		}
 	}
-	migrated, err := migratedWorkShadowIDs(legs, workIDs)
+	var graph beads.Store
+	for _, leg := range legs {
+		if leg.label == "graph" {
+			graph = leg.store
+			break
+		}
+	}
+	migrated, err := federation.MigratedWorkShadowIDs(graph, workIDs)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -355,35 +363,4 @@ func federateBeadLegsWithOwner(legs []readyLeg, read func(beads.Store) ([]beads.
 		}
 	}
 	return merged, owner, nil
-}
-
-func migratedWorkShadowIDs(legs []readyLeg, workIDs []string) (map[string]struct{}, error) {
-	if len(workIDs) == 0 {
-		return nil, nil
-	}
-	var graph beads.Store
-	for _, leg := range legs {
-		if leg.label == "graph" {
-			graph = leg.store
-			break
-		}
-	}
-	if graph == nil {
-		return nil, nil
-	}
-	rows, err := beads.HandlesFor(graph).Live.List(beads.ListQuery{
-		IDs:           workIDs,
-		IncludeClosed: true,
-		TierMode:      beads.FederatedReadTier,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("graph store: checking migrated work shadows: %w", err)
-	}
-	migrated := make(map[string]struct{})
-	for _, b := range rows {
-		if b.Metadata[beadmeta.InfraMigratedFromMetadataKey] == "work" {
-			migrated[b.ID] = struct{}{}
-		}
-	}
-	return migrated, nil
 }

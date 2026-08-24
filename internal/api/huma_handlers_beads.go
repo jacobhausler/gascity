@@ -3,12 +3,11 @@ package api
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api/apierr"
-	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
+	"github.com/gastownhall/gascity/internal/beads/federation"
 )
 
 // humaHandleBeadList is the Huma-typed handler for GET /v0/beads.
@@ -111,7 +110,8 @@ func (s *Server) humaHandleBeadList(ctx context.Context, input *BeadListInput) (
 
 	// Bead ids are globally unique, so an id is one bead no matter how many legs
 	// hold a row for it. A migrated split city can hold both copies: migration
-	// preserves ids and stamps the graph twin with gc.infra_migrated_from=work.
+	// preserves ids and stamps the graph twin with gc.infra_migrated_from equal
+	// to config.StorageWorkBinding.
 	// The graph lookup below removes only those explicitly marked work shadows;
 	// unstamped co-resident ids retain first-leg-wins behavior.
 	seen := map[string]bool{}
@@ -120,7 +120,7 @@ func (s *Server) humaHandleBeadList(ctx context.Context, input *BeadListInput) (
 	var pa partialAggregator
 	for i, leg := range legs {
 		if leg.graph {
-			migrated, err := migratedWorkShadowIDs(leg.store, workIDs)
+			migrated, err := federation.MigratedWorkShadowIDs(leg.store, workIDs)
 			if err != nil {
 				return nil, graphPlaneUnavailable("migrated work shadow lookup", err, pa.messages()...)
 			}
@@ -494,41 +494,13 @@ func readyFederationQuery() beads.ReadyQuery {
 	return beads.ReadyQuery{TierMode: beads.FederatedReadTier}
 }
 
-// migratedWorkShadowIDs reads the authoritative graph binding once for all
-// work-leg candidates. A migration keeps the source work row and stamps only
-// its graph twin, so that explicit marker is the sole authority for removing
-// the retained work shadow. IncludeClosed is required because a closed twin is
-// precisely the case where the open work copy would otherwise remain
-// claimable. An error is fatal to the graph federation: guessing would make a
-// work-only answer indistinguishable from a complete one.
-func migratedWorkShadowIDs(graph beads.Store, workIDs []string) (map[string]bool, error) {
-	if graph == nil || len(workIDs) == 0 {
-		return nil, nil
-	}
-	rows, err := graph.List(beads.ListQuery{
-		IDs:           workIDs,
-		IncludeClosed: true,
-		TierMode:      beads.FederatedReadTier,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("checking migrated work shadows: %w", err)
-	}
-	shadows := make(map[string]bool)
-	for _, row := range rows {
-		if row.Metadata[beadmeta.InfraMigratedFromMetadataKey] == "work" {
-			shadows[row.ID] = true
-		}
-	}
-	return shadows, nil
-}
-
-func suppressMigratedWorkRows(rows []beads.Bead, seen map[string]bool, shadows map[string]bool) ([]beads.Bead, map[string]bool) {
+func suppressMigratedWorkRows(rows []beads.Bead, seen map[string]bool, shadows map[string]struct{}) ([]beads.Bead, map[string]bool) {
 	if len(shadows) == 0 {
 		return rows, seen
 	}
 	filtered := make([]beads.Bead, 0, len(rows))
 	for _, row := range rows {
-		if shadows[row.ID] {
+		if _, shadowed := shadows[row.ID]; shadowed {
 			delete(seen, row.ID)
 			continue
 		}
@@ -554,7 +526,8 @@ func suppressMigratedWorkRows(rows []beads.Bead, seen map[string]bool, shadows m
 //     sqliteReadySQL orders by (created_at ASC, id ASC) with no priority term at
 //     all. Per-leg order is therefore deterministic, not canonical.
 //   - Dedupe: a work row with a graph twin explicitly stamped
-//     gc.infra_migrated_from=work is suppressed after one batched graph lookup,
+//     gc.infra_migrated_from=config.StorageWorkBinding is suppressed after one
+//     batched graph lookup,
 //     allowing an active graph row to win or a closed twin to remove the id.
 //     Unstamped co-resident ids retain first-leg-wins with the graph leg last.
 //   - Merged order: leg concatenation, deliberately NOT re-sorted. A global
@@ -638,7 +611,7 @@ func (s *Server) humaHandleBeadReady(ctx context.Context, input *BeadReadyInput)
 	// concatenation whose prefix is exactly what a legacy city serves, and it
 	// does NOT go through federate(): the graph leg has no partial tier.
 	if graph := relocatedGraphStore(s.state); graph != nil {
-		migrated, err := migratedWorkShadowIDs(graph, workIDs)
+		migrated, err := federation.MigratedWorkShadowIDs(graph, workIDs)
 		if err != nil {
 			return nil, graphPlaneUnavailable("migrated work shadow lookup", err, pa.messages()...)
 		}
