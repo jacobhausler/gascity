@@ -2845,14 +2845,11 @@ func cleanupDeadRuntimeSessionCorpses(
 	sessionBeads *sessionBeadSnapshot,
 	dt *drainTracker,
 	sp runtime.Provider,
-	clk clock.Clock,
+	_ clock.Clock,
 	stderr io.Writer,
 ) int {
 	if sessionBeads == nil || sp == nil {
 		return 0
-	}
-	if clk == nil {
-		clk = clock.Real{}
 	}
 	deadChecker, ok := sp.(runtime.DeadRuntimeSessionChecker)
 	if !ok {
@@ -2900,34 +2897,12 @@ func cleanupDeadRuntimeSessionCorpses(
 		if !dead {
 			continue
 		}
-		if err := sp.Stop(name); err != nil {
-			if runtime.IsSessionGone(err) {
-				continue
-			}
-			fmt.Fprintf(stderr, "session reconciler: cleaning dead runtime session %s: %v\n", name, err) //nolint:errcheck
-			continue
-		}
-		fmt.Fprintf(stderr, "session reconciler: cleaned dead runtime session %s\n", name) //nolint:errcheck
-		// Close the bead so its `alias` metadata (and session_name) is
-		// released. Otherwise the slot stays claimed by a dead session
-		// and the next reconciler tick spawns a successor that fails
-		// EnsureAliasAvailable with ErrSessionAliasExists, accumulating
-		// asleep/runtime-missing ghosts on the same slot indefinitely
-		// (gastownhall/gascity#2437).
-		//
-		// closeBead now releases any in-progress work assigned to this
-		// session (via releaseWorkFromClosedSessionBead), so closing is
-		// safe even when the session has assigned work. A session whose
-		// runtime has been confirmed dead and stopped cannot be resumed,
-		// so releasing its work is the correct action.
-		//
-		// The outer `if store != nil` guard tolerates a nil store so the
-		// runtime-Stop side effect still runs in test contexts that do not
-		// wire a real store; closeBead is idempotent on already-closed beads.
-		if store != nil {
-			closeBead(store, info.ID, "dead-runtime", clk.Now().UTC(), stderr)
-		}
-		cleaned++
+		// CANARY-ONLY TEMPORARY POSTURE: this branch deliberately quarantines a
+		// confirmed corpse without claiming convergence. Leave the runtime,
+		// evidence, bead, and assigned work untouched for an operator-directed
+		// STOP; do not add token reads, capture, provider Stop, or bead close.
+		fmt.Fprintf(stderr, "WARN: CANARY-ONLY dead runtime quarantine: confirmed dead runtime %q left untouched; operator STOP required\n", name) //nolint:errcheck
+		continue
 	}
 	return cleaned
 }
@@ -3022,15 +2997,10 @@ func reapRuntimesBoundToClosedBeads(
 			continue
 		}
 
-		if err := sp.Stop(name); err != nil {
-			if runtime.IsSessionGone(err) {
-				continue
-			}
-			fmt.Fprintf(stderr, "session reconciler: reaping runtime %q bound to closed bead %s: %v\n", name, liveID, err) //nolint:errcheck
-			continue
-		}
-		fmt.Fprintf(stderr, "session reconciler: reaped runtime %q bound to closed session bead %s\n", name, liveID) //nolint:errcheck
-		reaped++
+		// CANARY-ONLY TEMPORARY POSTURE: metadata proves historical ownership,
+		// not that this name still belongs to the same runtime. Leave it for an
+		// operator-directed STOP so a same-name rebind cannot be destroyed.
+		fmt.Fprintf(stderr, "WARN: CANARY-ONLY closed-bead runtime quarantine: %q remains untouched (closed bead %s); operator STOP required\n", name, liveID) //nolint:errcheck
 	}
 	return reaped
 }

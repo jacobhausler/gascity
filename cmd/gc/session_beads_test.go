@@ -73,6 +73,17 @@ type deadRuntimeArtifactProvider struct {
 	stopCalls map[string]int
 }
 
+type quarantineCanaryProvider struct {
+	*deadRuntimeArtifactProvider
+	metaCalls   int
+	recordCalls int
+}
+
+func (p *quarantineCanaryProvider) GetMeta(name, key string) (string, error) {
+	p.metaCalls++
+	return p.Fake.GetMeta(name, key)
+}
+
 type processTableSweepProvider struct {
 	*runtime.Fake
 	runtimes     []runtime.LiveRuntime
@@ -6997,7 +7008,7 @@ func TestReapStaleSessionBeads_NilStoreAndProvider(t *testing.T) {
 	}
 }
 
-func TestCleanupDeadRuntimeSessionCorpsesStopsVisibleDeadSessions(t *testing.T) {
+func TestCleanupDeadRuntimeSessionCorpsesQuarantinesVisibleDeadSessions(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["dead-worker"] = true
 	sp.visible["live-worker"] = true
@@ -7034,14 +7045,109 @@ func TestCleanupDeadRuntimeSessionCorpsesStopsVisibleDeadSessions(t *testing.T) 
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(nil, nil, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
-	if len(sp.stopped) != 1 || sp.stopped[0] != "dead-worker" {
-		t.Fatalf("stopped = %v, want [dead-worker]", sp.stopped)
+	if len(sp.stopped) != 0 || sp.stopCalls["dead-worker"] != 0 {
+		t.Fatalf("stopped = %v calls=%d, want no stop", sp.stopped, sp.stopCalls["dead-worker"])
 	}
-	if !sp.visible["live-worker"] || !sp.visible["untracked-worker"] {
-		t.Fatalf("cleanup stopped live or untracked session: visible=%v", sp.visible)
+	if !sp.visible["dead-worker"] || !sp.visible["live-worker"] || !sp.visible["untracked-worker"] {
+		t.Fatalf("canary mutated runtime visibility: visible=%v", sp.visible)
+	}
+}
+
+func TestCleanupDeadRuntimeSessionCorpsesCanaryQuarantinesConfirmedDeadRuntime(t *testing.T) {
+	sp := &quarantineCanaryProvider{deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider()}
+	sp.visible["dead-worker"] = true
+	sp.dead["dead-worker"] = true
+	store := beads.NewMemStore()
+	sessionBead, err := store.Create(beads.Bead{
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name": "dead-worker",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create session bead: %v", err)
+	}
+	work, err := store.Create(beads.Bead{
+		Status:   "in_progress",
+		Assignee: sessionBead.ID,
+		Title:    "work remains assigned",
+	})
+	if err != nil {
+		t.Fatalf("create work bead: %v", err)
+	}
+	inProgress := "in_progress"
+	if err := store.Update(work.ID, beads.UpdateOpts{Status: &inProgress}); err != nil {
+		t.Fatalf("mark work in_progress: %v", err)
+	}
+	snapshot := newSessionBeadSnapshot([]beads.Bead{sessionBead})
+	var stderr bytes.Buffer
+	if got := cleanupDeadRuntimeSessionCorpses(store, nil, nil, snapshot, nil, sp, nil, &stderr); got != 0 {
+		t.Fatalf("canary cleanup = %d, want 0; stderr=%q", got, stderr.String())
+	}
+	if sp.stopCalls["dead-worker"] != 0 {
+		t.Fatalf("provider Stop calls = %d, want 0", sp.stopCalls["dead-worker"])
+	}
+	if sp.metaCalls != 0 || sp.recordCalls != 0 {
+		t.Fatalf("destructive metadata/record calls = (%d, %d), want (0, 0)", sp.metaCalls, sp.recordCalls)
+	}
+	if !sp.visible["dead-worker"] || !sp.dead["dead-worker"] {
+		t.Fatalf("canary mutated corpse state: visible=%v dead=%v", sp.visible["dead-worker"], sp.dead["dead-worker"])
+	}
+	afterSession, err := store.Get(sessionBead.ID)
+	if err != nil {
+		t.Fatalf("get session bead: %v", err)
+	}
+	if afterSession.Status != "open" {
+		t.Fatalf("session bead status = %q, want open", afterSession.Status)
+	}
+	afterWork, err := store.Get(work.ID)
+	if err != nil {
+		t.Fatalf("get work bead: %v", err)
+	}
+	if afterWork.Status != "in_progress" || afterWork.Assignee != sessionBead.ID {
+		t.Fatalf("work after canary = status %q assignee %q, want in_progress/%q", afterWork.Status, afterWork.Assignee, sessionBead.ID)
+	}
+	if !strings.Contains(stderr.String(), "CANARY-ONLY") || !strings.Contains(stderr.String(), "dead-worker") {
+		t.Fatalf("stderr = %q, want bounded CANARY-ONLY quarantine diagnostic", stderr.String())
+	}
+}
+
+func TestCleanupDeadRuntimeSessionCorpsesCanaryLeavesLiveRuntimeUntouched(t *testing.T) {
+	sp := &quarantineCanaryProvider{deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider()}
+	sp.visible["live-worker"] = true
+	sp.live["live-worker"] = true
+	sessionBead := beads.Bead{ID: "live-session", Status: "open", Metadata: map[string]string{"session_name": "live-worker"}}
+	var stderr bytes.Buffer
+	if got := cleanupDeadRuntimeSessionCorpses(nil, nil, nil, newSessionBeadSnapshot([]beads.Bead{sessionBead}), nil, sp, nil, &stderr); got != 0 {
+		t.Fatalf("live cleanup = %d, want 0; stderr=%q", got, stderr.String())
+	}
+	if sp.stopCalls["live-worker"] != 0 || sp.metaCalls != 0 || sp.recordCalls != 0 {
+		t.Fatalf("live path mutated provider: stop=%d meta=%d record=%d", sp.stopCalls["live-worker"], sp.metaCalls, sp.recordCalls)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("live path emitted diagnostic: %q", stderr.String())
+	}
+}
+
+func TestCleanupDeadRuntimeSessionCorpsesCanaryCheckerErrorLeavesEverythingUntouched(t *testing.T) {
+	sp := &quarantineCanaryProvider{deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider()}
+	sp.visible["uncertain-worker"] = true
+	sp.deadErrs["uncertain-worker"] = errors.New("checker unavailable")
+	sessionBead := beads.Bead{ID: "uncertain-session", Status: "open", Metadata: map[string]string{"session_name": "uncertain-worker"}}
+	var stderr bytes.Buffer
+	if got := cleanupDeadRuntimeSessionCorpses(nil, nil, nil, newSessionBeadSnapshot([]beads.Bead{sessionBead}), nil, sp, nil, &stderr); got != 0 {
+		t.Fatalf("uncertain cleanup = %d, want 0; stderr=%q", got, stderr.String())
+	}
+	if sp.stopCalls["uncertain-worker"] != 0 || sp.metaCalls != 0 || sp.recordCalls != 0 {
+		t.Fatalf("checker-error path mutated provider: stop=%d meta=%d record=%d", sp.stopCalls["uncertain-worker"], sp.metaCalls, sp.recordCalls)
+	}
+	if !strings.Contains(stderr.String(), "confirming dead runtime session uncertain-worker") {
+		t.Fatalf("stderr = %q, want checker error diagnostic", stderr.String())
 	}
 }
 
@@ -7093,7 +7199,7 @@ func TestCleanupDeadRuntimeSessionCorpsesSkipsVisibleSessionWhenCheckerReportsLi
 	}
 }
 
-func TestCleanupDeadRuntimeSessionCorpsesUsesPartialListResults(t *testing.T) {
+func TestCleanupDeadRuntimeSessionCorpsesQuarantinesPartialListDeadRuntime(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["worker"] = true
 	sp.dead["worker"] = true
@@ -7109,18 +7215,18 @@ func TestCleanupDeadRuntimeSessionCorpsesUsesPartialListResults(t *testing.T) {
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(nil, nil, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
-	if sp.stopCalls["worker"] != 1 {
-		t.Fatalf("Stop calls = %d, want 1", sp.stopCalls["worker"])
+	if sp.stopCalls["worker"] != 0 {
+		t.Fatalf("Stop calls = %d, want 0", sp.stopCalls["worker"])
 	}
 	if !strings.Contains(stderr.String(), "listing runtime sessions partially failed") {
 		t.Fatalf("stderr = %q, want partial-list warning", stderr.String())
 	}
 }
 
-func TestCleanupDeadRuntimeSessionCorpsesSkipsLifecycleOwnedBeads(t *testing.T) {
+func TestCleanupDeadRuntimeSessionCorpsesQuarantinesOnlyOrdinaryDeadRuntime(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	for _, name := range []string{"pending-worker", "draining-worker", "named-worker", "ordinary-worker"} {
 		sp.visible[name] = true
@@ -7166,11 +7272,11 @@ func TestCleanupDeadRuntimeSessionCorpsesSkipsLifecycleOwnedBeads(t *testing.T) 
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(nil, nil, nil, snapshot, dt, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
-	if sp.stopCalls["ordinary-worker"] != 1 {
-		t.Fatalf("ordinary Stop calls = %d, want 1", sp.stopCalls["ordinary-worker"])
+	if sp.stopCalls["ordinary-worker"] != 0 {
+		t.Fatalf("ordinary Stop calls = %d, want 0", sp.stopCalls["ordinary-worker"])
 	}
 	for _, name := range []string{"pending-worker", "draining-worker", "named-worker"} {
 		if sp.stopCalls[name] != 0 {
@@ -7192,15 +7298,15 @@ func TestCleanupDeadRuntimeSessionCorpsesSkipsBlankAndDeduplicatesNames(t *testi
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(nil, nil, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
-	if sp.stopCalls["worker"] != 1 {
-		t.Fatalf("Stop calls = %d, want 1", sp.stopCalls["worker"])
+	if sp.stopCalls["worker"] != 0 {
+		t.Fatalf("Stop calls = %d, want 0", sp.stopCalls["worker"])
 	}
 }
 
-func TestCleanupDeadRuntimeSessionCorpsesReportsStopErrors(t *testing.T) {
+func TestCleanupDeadRuntimeSessionCorpsesQuarantinesWithoutStopErrors(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["worker"] = true
 	sp.dead["worker"] = true
@@ -7219,20 +7325,17 @@ func TestCleanupDeadRuntimeSessionCorpsesReportsStopErrors(t *testing.T) {
 	if got != 0 {
 		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0", got)
 	}
-	if sp.stopCalls["worker"] != 1 {
-		t.Fatalf("Stop calls = %d, want 1", sp.stopCalls["worker"])
+	if sp.stopCalls["worker"] != 0 {
+		t.Fatalf("Stop calls = %d, want 0", sp.stopCalls["worker"])
 	}
-	if !strings.Contains(stderr.String(), "cleaning dead runtime session worker: stop failed") {
-		t.Fatalf("stderr = %q, want Stop error", stderr.String())
+	if !strings.Contains(stderr.String(), "CANARY-ONLY") {
+		t.Fatalf("stderr = %q, want CANARY-ONLY diagnostic", stderr.String())
 	}
 }
 
-// TestCleanupDeadRuntimeSessionCorpsesStampsCloseAtUsesInjectedClock
-// pins the clock-injection plumbing so a deterministic close timestamp
-// is verifiable in tests. Per Copilot review on PR #2512, the close
-// must use the injected clock rather than time.Now() so future tests
-// can assert on the stamped close time without flake.
-func TestCleanupDeadRuntimeSessionCorpsesStampsCloseAtUsesInjectedClock(t *testing.T) {
+// TestCleanupDeadRuntimeSessionCorpsesLeavesBeadOpen confirms
+// canary quarantine does not stamp a close time or otherwise mutate the bead.
+func TestCleanupDeadRuntimeSessionCorpsesLeavesBeadOpen(t *testing.T) {
 	store := beads.NewMemStore()
 	sessionBead, err := store.Create(beads.Bead{
 		Type:   sessionBeadType,
@@ -7257,33 +7360,25 @@ func TestCleanupDeadRuntimeSessionCorpsesStampsCloseAtUsesInjectedClock(t *testi
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(store, nil, nil, snapshot, nil, sp, clk, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
 
 	after, err := store.Get(sessionBead.ID)
 	if err != nil {
 		t.Fatalf("re-fetch bead: %v", err)
 	}
-	if after.Status != "closed" {
-		t.Fatalf("bead status = %q, want closed", after.Status)
+	if after.Status != "open" {
+		t.Fatalf("bead status = %q, want open", after.Status)
 	}
-	// closed_at metadata (or equivalent) must reflect the injected clock,
-	// proving the fix actually wired the clock through to closeBead.
-	if got := after.Metadata["closed_at"]; got != "" && got != frozen.Format(time.RFC3339) {
-		t.Errorf("closed_at = %q, want %q (injected fake clock not used)", got, frozen.Format(time.RFC3339))
+	if got := after.Metadata["closed_at"]; got != "" {
+		t.Errorf("closed_at = %q, want empty while quarantined", got)
 	}
 }
 
-// TestCleanupDeadRuntimeSessionCorpsesReleasesAliasOnBeadClose pins the fix
-// for gastownhall/gascity#2437: when a session's runtime is confirmed dead,
-// the cleanup must also close the session bead so its `alias` metadata is
-// released. Without this, the bead stays open with the alias claimed, the
-// pool reconciler tries to spawn a successor on the same slot, and
-// EnsureAliasAvailable fails with ErrSessionAliasExists — repeating every
-// tick until the operator manually closes the corpse (see the issue's
-// 176-ghosts-over-2-days dogfooded repro).
-func TestCleanupDeadRuntimeSessionCorpsesReleasesAliasOnBeadClose(t *testing.T) {
+// TestCleanupDeadRuntimeSessionCorpsesLeavesAliasClaimed confirms the
+// canary intentionally leaves the bead and alias for operator action.
+func TestCleanupDeadRuntimeSessionCorpsesLeavesAliasClaimed(t *testing.T) {
 	store := beads.NewMemStore()
 	bead, err := store.Create(beads.Bead{
 		Type:   sessionBeadType,
@@ -7307,8 +7402,8 @@ func TestCleanupDeadRuntimeSessionCorpsesReleasesAliasOnBeadClose(t *testing.T) 
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(store, nil, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
 
 	// Bead must transition to closed so its alias is released.
@@ -7316,23 +7411,19 @@ func TestCleanupDeadRuntimeSessionCorpsesReleasesAliasOnBeadClose(t *testing.T) 
 	if err != nil {
 		t.Fatalf("re-fetch bead: %v", err)
 	}
-	if after.Status != "closed" {
-		t.Fatalf("bead status = %q, want closed (alias not released — successors will fail EnsureAliasAvailable)", after.Status)
+	if after.Status != "open" {
+		t.Fatalf("bead status = %q, want open while quarantined", after.Status)
 	}
 
 	// The freed alias must now be available for a successor on the same slot.
-	if err := session.EnsureAliasAvailable(store, "gascity-packs/codex-1", ""); err != nil {
-		t.Fatalf("EnsureAliasAvailable after cleanup = %v, want nil (alias still held by closed corpse)", err)
+	if err := session.EnsureAliasAvailable(store, "gascity-packs/codex-1", ""); err == nil {
+		t.Fatal("EnsureAliasAvailable unexpectedly succeeded while quarantined bead retains alias")
 	}
 }
 
-// TestCleanupDeadRuntimeSessionCorpsesToleratesNilStore protects the
-// existing call-site contract: tests and any future callers that don't
-// wire a real store still get the runtime-Stop side effect without
-// panicking. The alias-release behavior is exercised by the sibling
-// TestCleanupDeadRuntimeSessionCorpsesReleasesAliasOnBeadClose with a
-// real store.
-func TestCleanupDeadRuntimeSessionCorpsesToleratesNilStore(t *testing.T) {
+// TestCleanupDeadRuntimeSessionCorpsesQuarantinesWithNilStore protects the canary
+// call-site contract when no store is wired: no stop or close is attempted.
+func TestCleanupDeadRuntimeSessionCorpsesQuarantinesWithNilStore(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["dead-worker"] = true
 	sp.dead["dead-worker"] = true
@@ -7348,28 +7439,17 @@ func TestCleanupDeadRuntimeSessionCorpsesToleratesNilStore(t *testing.T) {
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(nil, nil, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses(nilStore) = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses(nilStore) = %d, want 0; stderr=%q", got, stderr.String())
 	}
-	if sp.stopCalls["dead-worker"] != 1 {
-		t.Fatalf("Stop calls = %d, want 1 (runtime side effect must still run with nil store)", sp.stopCalls["dead-worker"])
+	if sp.stopCalls["dead-worker"] != 0 {
+		t.Fatalf("Stop calls = %d, want 0 in canary posture", sp.stopCalls["dead-worker"])
 	}
 }
 
-// TestCleanupDeadRuntimeSessionCorpsesRetainsBeadWhenInProgressWorkAssignedByID
-// is the assignment-aware safety regression Julian requested in the PR #2512
-// review (gastownhall/gascity#2512). When a session bead still owns
-// `in_progress` work assigned by bead ID, the dead-runtime cleanup must
-// preserve the bead (do NOT close it / do NOT release its alias). Closing
-// would orphan the work assignment, remove the session from future snapshots,
-// and starve the session.stranded diagnostic path (#1425) and normal
-// wake/recovery flows of the session record they rely on. Runtime-Stop side
-// effect should still run.
-// TestCleanupDeadRuntimeSessionCorpsesClosesBeadWithInProgressWorkAssignedByID
-// verifies that a confirmed-dead session is closed even when it holds
-// in-progress work assigned by bead ID. closeBead releases the work
-// via releaseWorkFromClosedSessionBead, so no orphan results.
-func TestCleanupDeadRuntimeSessionCorpsesClosesBeadWithInProgressWorkAssignedByID(t *testing.T) {
+// TestCleanupDeadRuntimeSessionCorpsesPreservesInProgressWorkAssignedByID
+// confirms canary quarantine preserves the session and its in-progress work.
+func TestCleanupDeadRuntimeSessionCorpsesPreservesInProgressWorkAssignedByID(t *testing.T) {
 	store := beads.NewMemStore()
 	sessionBead, err := store.Create(beads.Bead{
 		Type:   sessionBeadType,
@@ -7404,34 +7484,33 @@ func TestCleanupDeadRuntimeSessionCorpsesClosesBeadWithInProgressWorkAssignedByI
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(store, nil, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1 (runtime-Stop should still run); stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
 
-	// Session bead must be closed and work released.
+	// Session bead and work remain untouched for operator-directed quarantine.
 	after, err := store.Get(sessionBead.ID)
 	if err != nil {
 		t.Fatalf("re-fetch bead: %v", err)
 	}
-	if after.Status != "closed" {
-		t.Fatalf("bead status = %q, want closed — dead session must be closed so work is released", after.Status)
+	if after.Status != "open" {
+		t.Fatalf("bead status = %q, want open", after.Status)
 	}
 	gotWork, err := store.Get(work.ID)
 	if err != nil {
 		t.Fatalf("re-fetch work bead: %v", err)
 	}
-	if gotWork.Assignee != "" {
-		t.Errorf("work assignee = %q, want empty", gotWork.Assignee)
+	if gotWork.Assignee != sessionBead.ID {
+		t.Errorf("work assignee = %q, want %q", gotWork.Assignee, sessionBead.ID)
 	}
-	if gotWork.Status != "open" {
-		t.Errorf("work status = %q, want open", gotWork.Status)
+	if gotWork.Status != "in_progress" {
+		t.Errorf("work status = %q, want in_progress", gotWork.Status)
 	}
 }
 
-// TestCleanupDeadRuntimeSessionCorpsesClosesBeadWithOpenWorkAssignedBySessionName
-// verifies that assignment by runtime session_name also results in the bead
-// being closed and the work released when the session is confirmed dead.
-func TestCleanupDeadRuntimeSessionCorpsesClosesBeadWithOpenWorkAssignedBySessionName(t *testing.T) {
+// TestCleanupDeadRuntimeSessionCorpsesPreservesOpenWorkAssignedBySessionName
+// confirms canary quarantine preserves session-name work assignment.
+func TestCleanupDeadRuntimeSessionCorpsesPreservesOpenWorkAssignedBySessionName(t *testing.T) {
 	store := beads.NewMemStore()
 	sessionBead, err := store.Create(beads.Bead{
 		Type:   sessionBeadType,
@@ -7463,35 +7542,33 @@ func TestCleanupDeadRuntimeSessionCorpsesClosesBeadWithOpenWorkAssignedBySession
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(store, nil, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
 
 	after, err := store.Get(sessionBead.ID)
 	if err != nil {
 		t.Fatalf("re-fetch bead: %v", err)
 	}
-	if after.Status != "closed" {
-		t.Fatalf("bead status = %q, want closed", after.Status)
+	if after.Status != "open" {
+		t.Fatalf("bead status = %q, want open", after.Status)
 	}
 	gotWork, err := store.Get(work.ID)
 	if err != nil {
 		t.Fatalf("re-fetch work bead: %v", err)
 	}
-	if gotWork.Assignee != "" {
-		t.Errorf("work assignee = %q, want empty", gotWork.Assignee)
+	if gotWork.Assignee != "worker-7" {
+		t.Errorf("work assignee = %q, want worker-7", gotWork.Assignee)
 	}
 	if gotWork.Status != "open" {
 		t.Errorf("work status = %q, want open", gotWork.Status)
 	}
 }
 
-// TestCleanupDeadRuntimeSessionCorpsesClosesBeadWithRigStoreWorkAssigned
-// verifies that the session bead is closed even when assigned work lives in a
-// rig store. The primary-store work is released immediately via closeBead;
-// rig-store work is released on the next reconcile tick by
-// releaseOrphanedPoolAssignments, which sees the session bead is now closed.
-func TestCleanupDeadRuntimeSessionCorpsesClosesBeadWithRigStoreWorkAssigned(t *testing.T) {
+// TestCleanupDeadRuntimeSessionCorpsesPreservesRigStoreWorkAssigned
+// confirms canary quarantine preserves the session even when work lives in a
+// rig store.
+func TestCleanupDeadRuntimeSessionCorpsesPreservesRigStoreWorkAssigned(t *testing.T) {
 	store := beads.NewMemStore()
 	rigStore := beads.NewMemStore()
 
@@ -7524,28 +7601,23 @@ func TestCleanupDeadRuntimeSessionCorpsesClosesBeadWithRigStoreWorkAssigned(t *t
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(store, map[string]beads.Store{"myrig": rigStore}, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
 
-	// Session bead must be closed regardless of rig-store work.
+	// Session bead remains open, including when work lives in a rig store.
 	after, err := store.Get(sessionBead.ID)
 	if err != nil {
 		t.Fatalf("re-fetch bead: %v", err)
 	}
-	if after.Status != "closed" {
-		t.Fatalf("bead status = %q, want closed — dead session with rig-store work must still be closed", after.Status)
+	if after.Status != "open" {
+		t.Fatalf("bead status = %q, want open while quarantined", after.Status)
 	}
 }
 
-// TestCleanupDeadRuntimeSessionCorpsesReleasesWorkOnDeadSession asserts that
-// when a pool-worker session is confirmed dead, any in-progress work bead
-// assigned to it by bead ID is released back to open status so the pool
-// reconciler can assign it to a new worker session.
-//
-// Regression test for ga-7le: dead sessions with assigned work were silently
-// retained, preventing work re-assignment and causing pool stalls.
-func TestCleanupDeadRuntimeSessionCorpsesReleasesWorkOnDeadSession(t *testing.T) {
+// TestCleanupDeadRuntimeSessionCorpsesPreservesWorkOnDeadSession asserts that
+// canary quarantine leaves pool-worker work assigned and in progress.
+func TestCleanupDeadRuntimeSessionCorpsesPreservesWorkOnDeadSession(t *testing.T) {
 	store := beads.NewMemStore()
 
 	sessionBead, err := store.Create(beads.Bead{
@@ -7580,37 +7652,35 @@ func TestCleanupDeadRuntimeSessionCorpsesReleasesWorkOnDeadSession(t *testing.T)
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(store, nil, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
 
-	// Session bead must be closed: a confirmed-dead stopped session has no
-	// recovery path, so closeBead (which now releases orphaned work) is safe.
+	// Session bead and work remain untouched for operator-directed quarantine.
 	after, err := store.Get(sessionBead.ID)
 	if err != nil {
 		t.Fatalf("re-fetch session bead: %v", err)
 	}
-	if after.Status != "closed" {
-		t.Fatalf("session bead status = %q, want closed — dead session must be closed so work can be re-assigned", after.Status)
+	if after.Status != "open" {
+		t.Fatalf("session bead status = %q, want open", after.Status)
 	}
 
-	// Work bead must be released: assignee cleared and status reset to open.
+	// Work bead remains assigned and in progress.
 	gotWork, err := store.Get(work.ID)
 	if err != nil {
 		t.Fatalf("re-fetch work bead: %v", err)
 	}
-	if gotWork.Assignee != "" {
-		t.Errorf("work assignee = %q, want empty — dead session must release work", gotWork.Assignee)
+	if gotWork.Assignee != sessionBead.ID {
+		t.Errorf("work assignee = %q, want %q", gotWork.Assignee, sessionBead.ID)
 	}
-	if gotWork.Status != "open" {
-		t.Errorf("work status = %q, want open — dead session must release work", gotWork.Status)
+	if gotWork.Status != "in_progress" {
+		t.Errorf("work status = %q, want in_progress", gotWork.Status)
 	}
 }
 
-// TestCleanupDeadRuntimeSessionCorpsesReleasesWorkAssignedBySessionName asserts
-// that work assigned by session_name (not bead ID) is also released when the
-// session is confirmed dead and its bead is closed.
-func TestCleanupDeadRuntimeSessionCorpsesReleasesWorkAssignedBySessionName(t *testing.T) {
+// TestCleanupDeadRuntimeSessionCorpsesPreservesWorkAssignedBySessionName asserts
+// that canary quarantine preserves work assigned by session_name.
+func TestCleanupDeadRuntimeSessionCorpsesPreservesWorkAssignedBySessionName(t *testing.T) {
 	store := beads.NewMemStore()
 
 	sessionBead, err := store.Create(beads.Bead{
@@ -7646,27 +7716,27 @@ func TestCleanupDeadRuntimeSessionCorpsesReleasesWorkAssignedBySessionName(t *te
 
 	var stderr bytes.Buffer
 	got := cleanupDeadRuntimeSessionCorpses(store, nil, nil, snapshot, nil, sp, nil, &stderr)
-	if got != 1 {
-		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
 
 	after, err := store.Get(sessionBead.ID)
 	if err != nil {
 		t.Fatalf("re-fetch session bead: %v", err)
 	}
-	if after.Status != "closed" {
-		t.Fatalf("session bead status = %q, want closed", after.Status)
+	if after.Status != "open" {
+		t.Fatalf("session bead status = %q, want open", after.Status)
 	}
 
 	gotWork, err := store.Get(work.ID)
 	if err != nil {
 		t.Fatalf("re-fetch work bead: %v", err)
 	}
-	if gotWork.Assignee != "" {
-		t.Errorf("work assignee = %q, want empty", gotWork.Assignee)
+	if gotWork.Assignee != "crashed-worker" {
+		t.Errorf("work assignee = %q, want crashed-worker", gotWork.Assignee)
 	}
-	if gotWork.Status != "open" {
-		t.Errorf("work status = %q, want open", gotWork.Status)
+	if gotWork.Status != "in_progress" {
+		t.Errorf("work status = %q, want in_progress", gotWork.Status)
 	}
 }
 
@@ -7868,11 +7938,10 @@ func nextLineContaining(lines []string, after int, needle string) int {
 	return -1
 }
 
-// TestReapRuntimesBoundToClosedBeadsStopsLiveRuntime reproduces the alias
-// hand-off corpse: a live runtime is still stamped with a closed bead's
-// GC_SESSION_ID while its session_name now belongs to a different, open bead.
-// The corpse must be reaped so the live owner can rebind the name.
-func TestReapRuntimesBoundToClosedBeadsStopsLiveRuntime(t *testing.T) {
+// TestReapRuntimesBoundToClosedBeadsCanaryLeavesLiveRuntimeUntouched covers
+// the alias hand-off race: a live runtime is still stamped with a closed
+// bead's GC_SESSION_ID while its session_name now belongs to another bead.
+func TestReapRuntimesBoundToClosedBeadsCanaryLeavesLiveRuntimeUntouched(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["mayor"] = true
 	if err := sp.SetMeta("mayor", "GC_SESSION_ID", "gm-closed"); err != nil {
@@ -7891,14 +7960,14 @@ func TestReapRuntimesBoundToClosedBeadsStopsLiveRuntime(t *testing.T) {
 
 	var stderr bytes.Buffer
 	got := reapRuntimesBoundToClosedBeads(store, snapshot, nil, sp, &stderr)
-	if got != 1 {
-		t.Fatalf("reapRuntimesBoundToClosedBeads() = %d, want 1; stderr=%q", got, stderr.String())
+	if got != 0 {
+		t.Fatalf("reapRuntimesBoundToClosedBeads() = %d, want 0; stderr=%q", got, stderr.String())
 	}
-	if len(sp.stopped) != 1 || sp.stopped[0] != "mayor" {
-		t.Fatalf("stopped = %v, want [mayor]", sp.stopped)
+	if len(sp.stopped) != 0 || sp.stopCalls["mayor"] != 0 {
+		t.Fatalf("stopped = %v calls=%d, want no stop", sp.stopped, sp.stopCalls["mayor"])
 	}
-	if !strings.Contains(stderr.String(), "reaped runtime \"mayor\" bound to closed session bead gm-closed") {
-		t.Fatalf("stderr = %q, want reap message", stderr.String())
+	if !strings.Contains(stderr.String(), "CANARY-ONLY") || !strings.Contains(stderr.String(), "mayor") {
+		t.Fatalf("stderr = %q, want bounded CANARY-ONLY diagnostic", stderr.String())
 	}
 }
 
