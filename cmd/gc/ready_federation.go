@@ -87,6 +87,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/storeref"
@@ -287,31 +288,12 @@ func federateListBeads(legs []readyLeg, q beads.ListQuery) ([]beads.Bead, error)
 }
 
 // federateListBeadsWithOwner is federateListBeads plus a record of which leg
-// served each merged row.
-//
-// It is separate rather than a widened federateListBeads because only the
-// crash-recovery arm needs the ownership map, and every other caller would then
-// carry a map it discards. The merge rule is the same one federateBeadLegs
-// applies — first leg to return an id wins — restated here rather than shared,
-// because sharing it would mean threading a per-leg callback through the read
-// closure that federateBeadLegs deliberately keeps store-shaped.
+// served each merged row. Both use the same shadow filter and first-leg merge
+// so the crash-recovery owner agrees with the ordinary list answer.
 func federateListBeadsWithOwner(legs []readyLeg, q beads.ListQuery) ([]beads.Bead, map[string]readyLeg, error) {
-	var merged []beads.Bead
-	owner := make(map[string]readyLeg)
-	for _, leg := range legs {
-		rows, err := leg.store.List(q)
-		if err != nil {
-			return nil, nil, fmt.Errorf("%s store: %w", leg.label, err)
-		}
-		for _, b := range rows {
-			if _, seen := owner[b.ID]; seen {
-				continue
-			}
-			owner[b.ID] = leg
-			merged = append(merged, b)
-		}
-	}
-	return merged, owner, nil
+	return federateBeadLegsWithOwner(legs, func(store beads.Store) ([]beads.Bead, error) {
+		return store.List(q)
+	})
 }
 
 // federateBeadLegs runs read against every leg in order and merges the results,
@@ -323,20 +305,82 @@ func federateListBeadsWithOwner(legs []readyLeg, q beads.ListQuery) ([]beads.Bea
 // nowhere to say "this is short", so a degraded leg here would be served as a
 // short array indistinguishable from "no work".
 func federateBeadLegs(legs []readyLeg, read func(beads.Store) ([]beads.Bead, error)) ([]beads.Bead, error) {
-	var merged []beads.Bead
-	seen := make(map[string]bool)
-	for _, leg := range legs {
+	rows, _, err := federateBeadLegsWithOwner(legs, read)
+	return rows, err
+}
+
+func federateBeadLegsWithOwner(legs []readyLeg, read func(beads.Store) ([]beads.Bead, error)) ([]beads.Bead, map[string]readyLeg, error) {
+	legRows := make([][]beads.Bead, len(legs))
+	workIDs := make([]string, 0)
+	seenWorkIDs := make(map[string]struct{})
+	for i, leg := range legs {
 		rows, err := read(leg.store)
 		if err != nil {
-			return nil, fmt.Errorf("%s store: %w", leg.label, err)
+			return nil, nil, fmt.Errorf("%s store: %w", leg.label, err)
+		}
+		legRows[i] = rows
+		if leg.label == "graph" {
+			continue
 		}
 		for _, b := range rows {
-			if seen[b.ID] {
+			if _, seen := seenWorkIDs[b.ID]; seen {
 				continue
 			}
-			seen[b.ID] = true
+			seenWorkIDs[b.ID] = struct{}{}
+			workIDs = append(workIDs, b.ID)
+		}
+	}
+	migrated, err := migratedWorkShadowIDs(legs, workIDs)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var merged []beads.Bead
+	owner := make(map[string]readyLeg)
+	for i, leg := range legs {
+		for _, b := range legRows[i] {
+			if leg.label != "graph" {
+				if _, shadowed := migrated[b.ID]; shadowed {
+					continue
+				}
+			}
+			if _, seen := owner[b.ID]; seen {
+				continue
+			}
+			owner[b.ID] = leg
 			merged = append(merged, b)
 		}
 	}
-	return merged, nil
+	return merged, owner, nil
+}
+
+func migratedWorkShadowIDs(legs []readyLeg, workIDs []string) (map[string]struct{}, error) {
+	if len(workIDs) == 0 {
+		return nil, nil
+	}
+	var graph beads.Store
+	for _, leg := range legs {
+		if leg.label == "graph" {
+			graph = leg.store
+			break
+		}
+	}
+	if graph == nil {
+		return nil, nil
+	}
+	rows, err := beads.HandlesFor(graph).Live.List(beads.ListQuery{
+		IDs:           workIDs,
+		IncludeClosed: true,
+		TierMode:      beads.FederatedReadTier,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("graph store: checking migrated work shadows: %w", err)
+	}
+	migrated := make(map[string]struct{})
+	for _, b := range rows {
+		if b.Metadata[beadmeta.InfraMigratedFromMetadataKey] == "work" {
+			migrated[b.ID] = struct{}{}
+		}
+	}
+	return migrated, nil
 }

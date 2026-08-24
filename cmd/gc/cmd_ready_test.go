@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/bdflags"
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/splittest"
 	"github.com/gastownhall/gascity/internal/config"
@@ -515,6 +516,174 @@ func TestReadyDedupeIsFirstLegWins(t *testing.T) {
 	}
 	if rows[0].Title != "retained work copy" {
 		t.Fatalf("co-resident %s resolved to %q, want the work store's row — the API's first-leg-wins rule puts the graph leg last, and CLI == API depends on matching it", workCopy.ID, rows[0].Title)
+	}
+}
+
+// TestReadySuppressesMigratedWorkShadow proves that a retained open work copy
+// does not win readiness over the closed graph twin stamped by migration.
+func TestReadySuppressesMigratedWorkShadow(t *testing.T) {
+	work := splittest.NewWorkStore(t, "gc")
+	graph := &readyListRecordingStore{Store: splittest.NewClassStore(t, config.BeadClassGraph)}
+	workCopy := mustCreateReadyBead(t, work, beads.Bead{Title: "retained work shadow", Type: "task"})
+	otherWork := mustCreateReadyBead(t, work, beads.Bead{Title: "ordinary work", Type: "task"})
+	forced, ok := graph.Store.(beads.ForeignIDCreator)
+	if !ok {
+		t.Fatalf("graph store %T cannot create the migration twin", graph.Store)
+	}
+	if _, err := forced.CreateWithForeignID(beads.Bead{
+		ID:    workCopy.ID,
+		Title: "closed graph twin",
+		Type:  "task",
+		Metadata: map[string]string{
+			beadmeta.InfraMigratedFromMetadataKey: "work",
+		},
+	}); err != nil {
+		t.Fatalf("create graph twin: %v", err)
+	}
+	if err := graph.Close(workCopy.ID); err != nil {
+		t.Fatalf("close graph twin: %v", err)
+	}
+	twin, err := graph.Get(workCopy.ID)
+	if err != nil || twin.Status != "closed" || twin.Metadata[beadmeta.InfraMigratedFromMetadataKey] != "work" {
+		t.Fatalf("graph twin = status=%q metadata=%v err=%v, want migration marker", twin.Status, twin.Metadata, err)
+	}
+	rows, err := federateReadyBeads([]readyLeg{
+		readyTestLeg("city", work),
+		readyTestLeg("graph", graph),
+	}, beads.ReadyQuery{TierMode: beads.FederatedReadTier})
+	if err != nil {
+		t.Fatalf("federate ready: %v", err)
+	}
+	got := readyWireIDsFromBeads(rows)
+	if slices.Contains(got, workCopy.ID) || !slices.Contains(got, otherWork.ID) {
+		t.Fatalf("federated ready = %v, want ordinary %s but not retained shadow %s", got, otherWork.ID, workCopy.ID)
+	}
+	if got := graph.idsQueries; len(got) != 1 || !slices.Equal(got[0], []string{workCopy.ID, otherWork.ID}) {
+		t.Fatalf("graph migration lookup queries = %v, want one batched query for [%s %s]", got, workCopy.ID, otherWork.ID)
+	}
+}
+
+func readyWireIDsFromBeads(rows []beads.Bead) []string {
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	return ids
+}
+
+type readyListRecordingStore struct {
+	beads.Store
+	idsQueries [][]string
+	idsErr     error
+}
+
+func (s *readyListRecordingStore) List(query beads.ListQuery) ([]beads.Bead, error) {
+	if len(query.IDs) > 0 {
+		s.idsQueries = append(s.idsQueries, append([]string(nil), query.IDs...))
+		if s.idsErr != nil {
+			return nil, s.idsErr
+		}
+	}
+	return s.Store.List(query)
+}
+
+func TestFederatedMigrationShadowRules(t *testing.T) {
+	tests := []struct {
+		name       string
+		graphState string
+		marked     bool
+		wantTitle  string
+	}{
+		{name: "active marked graph twin is authoritative", graphState: "open", marked: true, wantTitle: "graph twin"},
+		{name: "nonmigrated co-resident stays work first", graphState: "closed", marked: false, wantTitle: "work shadow"},
+		{name: "missing graph twin stays work first", graphState: "missing", marked: false, wantTitle: "work shadow"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			work := splittest.NewWorkStore(t, "gc")
+			graph := &readyListRecordingStore{Store: splittest.NewClassStore(t, config.BeadClassGraph)}
+			workCopy := mustCreateReadyBead(t, work, beads.Bead{Title: "work shadow", Type: "task"})
+			if tt.graphState != "missing" {
+				forced, ok := graph.Store.(beads.ForeignIDCreator)
+				if !ok {
+					t.Fatalf("graph store %T cannot create the twin", graph.Store)
+				}
+				metadata := map[string]string{}
+				if tt.marked {
+					metadata[beadmeta.InfraMigratedFromMetadataKey] = "work"
+				}
+				if _, err := forced.CreateWithForeignID(beads.Bead{ID: workCopy.ID, Title: "graph twin", Type: "task", Metadata: metadata}); err != nil {
+					t.Fatalf("create graph twin: %v", err)
+				}
+				if tt.graphState == "closed" {
+					if err := graph.Close(workCopy.ID); err != nil {
+						t.Fatalf("close graph twin: %v", err)
+					}
+				}
+			}
+
+			rows, err := federateReadyBeads([]readyLeg{readyTestLeg("city", work), readyTestLeg("graph", graph)}, beads.ReadyQuery{TierMode: beads.FederatedReadTier})
+			if err != nil {
+				t.Fatalf("federate ready: %v", err)
+			}
+			if len(rows) != 1 || rows[0].Title != tt.wantTitle {
+				t.Fatalf("federated ready = %+v, want one %q", rows, tt.wantTitle)
+			}
+		})
+	}
+}
+
+func TestFederatedMigrationShadowAppliesToListAndOwner(t *testing.T) {
+	work := splittest.NewWorkStore(t, "gc")
+	graph := &readyListRecordingStore{Store: splittest.NewClassStore(t, config.BeadClassGraph)}
+	workCopy := mustCreateReadyBead(t, work, beads.Bead{Title: "retained work shadow", Type: "task"})
+	forced, ok := graph.Store.(beads.ForeignIDCreator)
+	if !ok {
+		t.Fatalf("graph store %T cannot create the migration twin", graph.Store)
+	}
+	if _, err := forced.CreateWithForeignID(beads.Bead{ID: workCopy.ID, Title: "closed graph twin", Type: "task", Metadata: map[string]string{beadmeta.InfraMigratedFromMetadataKey: "work"}}); err != nil {
+		t.Fatalf("create graph twin: %v", err)
+	}
+	if err := graph.Close(workCopy.ID); err != nil {
+		t.Fatalf("close graph twin: %v", err)
+	}
+	legs := []readyLeg{readyTestLeg("city", work), readyTestLeg("graph", graph)}
+	query := beads.ListQuery{Status: "open", TierMode: beads.FederatedReadTier}
+	rows, err := federateListBeads(legs, query)
+	if err != nil {
+		t.Fatalf("federate list: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("federated list = %+v, want migrated shadow suppressed", rows)
+	}
+	rows, owners, err := federateListBeadsWithOwner(legs, query)
+	if err != nil {
+		t.Fatalf("federate list with owner: %v", err)
+	}
+	if len(rows) != 0 || len(owners) != 0 {
+		t.Fatalf("federated list with owner = rows:%+v owners:%v, want migrated shadow suppressed", rows, owners)
+	}
+}
+
+func TestFederatedMigrationShadowLookupFailsClosed(t *testing.T) {
+	work := splittest.NewWorkStore(t, "gc")
+	graph := &readyListRecordingStore{Store: splittest.NewClassStore(t, config.BeadClassGraph), idsErr: errors.New("graph unavailable")}
+	mustCreateReadyBead(t, work, beads.Bead{Title: "work", Type: "task"})
+	rows, err := federateReadyBeads([]readyLeg{readyTestLeg("city", work), readyTestLeg("graph", graph)}, beads.ReadyQuery{TierMode: beads.FederatedReadTier})
+	if err == nil || !strings.Contains(err.Error(), "checking migrated work shadows") {
+		t.Fatalf("federate ready = rows:%v err:%v, want graph shadow lookup failure", rows, err)
+	}
+}
+
+func TestFederatedMigrationShadowSingleStoreUnchanged(t *testing.T) {
+	work := &readyListRecordingStore{Store: splittest.NewWorkStore(t, "gc")}
+	row := mustCreateReadyBead(t, work, beads.Bead{Title: "single-store work", Type: "task"})
+	rows, err := federateReadyBeads([]readyLeg{readyTestLeg("city", work)}, beads.ReadyQuery{TierMode: beads.FederatedReadTier})
+	if err != nil {
+		t.Fatalf("federate ready: %v", err)
+	}
+	if len(rows) != 1 || rows[0].ID != row.ID {
+		t.Fatalf("single-store ready = %+v, want %s", rows, row.ID)
 	}
 }
 
