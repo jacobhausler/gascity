@@ -17,6 +17,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/executionevent"
+	"github.com/gastownhall/gascity/internal/session"
 )
 
 const hookClaimCommandName = "hook"
@@ -38,6 +39,7 @@ const (
 const (
 	hookClaimReleaseReasonUndelivered = "result_undelivered"
 	hookClaimReleaseReasonStraddled   = "claim_window_straddled"
+	hookClaimReleaseReasonPointerCAS  = "current_claim_conflict"
 )
 
 var hookClaimMutationTimeout = 10 * time.Second
@@ -159,11 +161,27 @@ type hookClaimOps struct {
 	// (gc.work_branch and/or the durable session back-reference gc.session_id /
 	// gc.session_name) onto the claimed bead in ONE update. Best-effort.
 	StampWorkMeta hookStampWorkMetaFunc
-	// StampSessionClaim records the claimed bead id on the CLAIMING SESSION's own
-	// bead — the reverse direction from StampWorkMeta, and the only route by
-	// which the step's shell can later learn which bead it is running.
-	// Best-effort.
-	StampSessionClaim hookStampSessionClaimFunc
+	// ReadSessionClaim snapshots the current-claim pointer before the work query.
+	// A read error fails closed: the caller cannot safely decide whether a fresh
+	// claim would replace live work already owned by this session.
+	ReadSessionClaim func(sessionID string) (string, error)
+	// ReserveSessionClaim conditionally replaces expected with next on the
+	// claiming session's bead. It is the only reservation path; there is no
+	// unconditional fallback when CAS is unavailable.
+	ReserveSessionClaim func(sessionID, expected, next string) (beads.MetadataCASOutcome, error)
+	// ClearSessionClaim conditionally clears expected from the claiming session's
+	// bead. EPIPE/unwind paths use this expected-value clear so a later winner's
+	// pointer cannot be erased.
+	ClearSessionClaim func(sessionID, expected string) (beads.MetadataCASOutcome, error)
+	// CurrentClaimID is the one invocation snapshot shared across federated work
+	// legs. CurrentClaimReady distinguishes an intentionally empty pointer from a
+	// snapshot that was never taken.
+	CurrentClaimID    string
+	CurrentClaimReady bool
+	// CurrentClaimResolution caches the authoritative pointer read so a
+	// federated claim does not re-read the same work bead once per store leg.
+	CurrentClaimResolution hookCurrentClaimResolution
+	CurrentClaimResolved   bool
 	// ReadWorkMeta is the post-stamp authoritative readback used only to
 	// establish the durable lifecycle-start emission point.
 	ReadWorkMeta             func(context.Context, string, []string, string, string) (beads.Bead, error)
@@ -196,6 +214,15 @@ type hookClaimOps struct {
 	// not-found from ONE leg be checked against the others before it opens the
 	// escalation. See claim_class_route.go.
 	ClassRoute *hookClaimClassRoute
+	// WorkLegs is the complete ordered ownership fan-out captured before query
+	// scoping. It is intentionally distinct from the optimized query store set.
+	WorkLegs []hookStore
+	// Execution context is derived once for the resident work ledger. It stays
+	// separate from hookClaimOptions.Env, which is the original invocation
+	// identity used by the current-claim CAS.
+	ExecutionDir   string
+	ExecutionEnv   []string
+	ExecutionReady bool
 }
 
 type (
@@ -206,7 +233,6 @@ type (
 	hookEmitClaimRejectedFunc  func(beadID, existingClaimant, attemptedClaimant string)
 	hookResolveWorkBranchFunc  func(dir string) string
 	hookStampWorkMetaFunc      func(ctx context.Context, dir string, env []string, beadID, assignee string, patch map[string]string) error
-	hookStampSessionClaimFunc  func(sessionID, beadID string) error
 	hookPublishRunMapFunc      func(runID, beadID string, sessionKeys ...string) error
 	hookClaimReleaseFunc       func(ctx context.Context, dir string, env []string, beadID, assignee string) (bool, error)
 )
@@ -264,9 +290,7 @@ func doHookClaim(workQuery, dir string, opts hookClaimOptions, ops hookClaimOps,
 // normalized in place so a non-terminal caller can reuse the normalized ops
 // (defaults applied) for the shared drain.
 func tryHookClaim(workQuery, dir string, opts *hookClaimOptions, ops *hookClaimOps, stdout, stderr io.Writer) hookClaimResult {
-	opts.Assignee = strings.TrimSpace(opts.Assignee)
-	opts.IdentityCandidates = hookClaimIdentityCandidates(append([]string{opts.Assignee}, opts.IdentityCandidates...)...)
-	opts.RouteTargets = hookClaimRouteTargets(opts.RouteTargets...)
+	normalizeHookClaimOptions(opts)
 	if opts.Assignee == "" {
 		fmt.Fprintln(stderr, "gc hook --claim: assignee not specified (set $GC_SESSION_NAME or $GC_SESSION_ID)") //nolint:errcheck
 		return hookClaimResult{terminal: true, code: 1}
@@ -276,6 +300,11 @@ func tryHookClaim(workQuery, dir string, opts *hookClaimOptions, ops *hookClaimO
 		return hookClaimResult{terminal: true, code: 1}
 	}
 	ops.applyDefaults()
+	if !ops.ExecutionReady {
+		ops.ExecutionDir = dir
+		ops.ExecutionEnv = opts.Env
+		ops.ExecutionReady = true
+	}
 	now := ops.Now
 
 	// F-A. A provider callback is not a turn: its stdout goes to the hook
@@ -289,6 +318,51 @@ func tryHookClaim(workQuery, dir string, opts *hookClaimOptions, ops *hookClaimO
 	if marker := hookClaimNonTurnMarker(opts.Env); marker != "" {
 		return hookClaimResult{terminal: true, code: writeHookClaimNonTurnDrain(marker, *opts, stdout, stderr)}
 	}
+	if err := ops.snapshotCurrentClaim(opts.Env); err != nil {
+		fmt.Fprintf(stderr, "gc hook --claim: %v\n", err) //nolint:errcheck
+		// A pointer read failure is not an idle result. Do not claim unrelated
+		// work and do not emit a drain that could retire a seat whose current
+		// assignment we failed to inspect.
+		return hookClaimResult{terminal: true, code: 1}
+	}
+	// Resolve the authoritative pointed-to assignment before querying for fresh
+	// work. A pointed-work read failure must not even enter the query/claim path,
+	// and a live pointer must be adopted regardless of whether the ready query is
+	// empty, filtered, or otherwise unable to return that row.
+	current := ops.CurrentClaimResolution
+	if !ops.CurrentClaimResolved {
+		var err error
+		current, err = resolveHookCurrentClaim(nil, *opts, *ops, dir)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc hook --claim: %v\n", err) //nolint:errcheck
+			return hookClaimResult{terminal: true, code: 1}
+		}
+		ops.CurrentClaimResolution = current
+		ops.CurrentClaimResolved = true
+	}
+	if current.live {
+		ops.setExecutionFromResidence(current.residence, dir, opts.Env)
+		executionDir, _ := ops.executionContext(dir, opts.Env)
+		if current.open {
+			readyResult := claimFirstReadyHookAssignment([]beads.Bead{current.bead}, *opts, *ops, executionDir, stdout, stderr)
+			if readyResult.terminal {
+				return readyResult
+			}
+			fmt.Fprintf(stderr, "gc hook --claim: current open claim %s could not be promoted\n", current.bead.ID) //nolint:errcheck
+			return hookClaimResult{terminal: true, code: 1}
+		}
+		result := hookClaimJSONResult{
+			SchemaVersion: "1",
+			OK:            true,
+			Command:       hookClaimCommandName,
+			Action:        "work",
+			Reason:        "existing_assignment",
+			BeadID:        current.bead.ID,
+			Assignee:      current.bead.Assignee,
+			Route:         hookClaimRoute(current.bead),
+		}
+		return hookClaimResult{terminal: true, code: writeHookClaimWorkResultForBead(result, current.bead, *opts, *ops, executionDir, false, stdout, stderr)}
+	}
 
 	output, err := ops.Runner(workQuery, dir)
 	if err != nil {
@@ -298,16 +372,25 @@ func tryHookClaim(workQuery, dir string, opts *hookClaimOptions, ops *hookClaimO
 
 	normalized := normalizeWorkQueryOutput(strings.TrimSpace(output))
 	normalized = filterUnreadyHookCandidates(normalized, now())
-	if !workQueryHasReadyWork(normalized) {
+	hasReadyWork := workQueryHasReadyWork(normalized)
+	var candidates []beads.Bead
+	if hasReadyWork {
+		var skipped []hookClaimSkip
+		candidates, skipped, err = decodeHookClaimBeads(normalized)
+		if err != nil {
+			fmt.Fprintf(stderr, "gc hook --claim: requires JSON work_query output to identify claim candidates: %v\n", err) //nolint:errcheck
+			return hookClaimResult{terminal: true, code: 1}
+		}
+		for _, skip := range skipped {
+			fmt.Fprintf(stderr, "gc hook --claim: skipping undecodable bead %s: %v\n", skip.ID, skip.Err) //nolint:errcheck
+		}
+	}
+
+	if current.stale {
+		candidates = removeHookCurrentCandidate(candidates, ops.CurrentClaimID)
+	}
+	if !hasReadyWork && len(candidates) == 0 {
 		return hookClaimResult{}
-	}
-	candidates, skipped, err := decodeHookClaimBeads(normalized)
-	if err != nil {
-		fmt.Fprintf(stderr, "gc hook --claim: requires JSON work_query output to identify claim candidates: %v\n", err) //nolint:errcheck
-		return hookClaimResult{terminal: true, code: 1}
-	}
-	for _, skip := range skipped {
-		fmt.Fprintf(stderr, "gc hook --claim: skipping undecodable bead %s: %v\n", skip.ID, skip.Err) //nolint:errcheck
 	}
 	if len(candidates) == 0 {
 		return hookClaimResult{}
@@ -357,8 +440,14 @@ func (ops *hookClaimOps) applyDefaults() {
 	if ops.StampWorkMeta == nil {
 		ops.StampWorkMeta = hookStampWorkMetaWithBdStore
 	}
-	if ops.StampSessionClaim == nil {
-		ops.StampSessionClaim = hookStampSessionCurrentClaim
+	if ops.ReadSessionClaim == nil {
+		ops.ReadSessionClaim = hookReadSessionCurrentClaim
+	}
+	if ops.ReserveSessionClaim == nil {
+		ops.ReserveSessionClaim = hookReserveSessionCurrentClaim
+	}
+	if ops.ClearSessionClaim == nil {
+		ops.ClearSessionClaim = hookClearSessionCurrentClaimCAS
 	}
 	if ops.PublishRunMap == nil {
 		ops.PublishRunMap = writeRunMap
@@ -390,6 +479,59 @@ func (ops *hookClaimOps) applyDefaults() {
 	if ops.ClaimWindow <= 0 {
 		ops.ClaimWindow = resolveHookClaimWindow()
 	}
+}
+
+func normalizeHookClaimOptions(opts *hookClaimOptions) {
+	opts.Assignee = strings.TrimSpace(opts.Assignee)
+	opts.IdentityCandidates = hookClaimIdentityCandidates(append([]string{opts.Assignee}, opts.IdentityCandidates...)...)
+	opts.RouteTargets = hookClaimRouteTargets(opts.RouteTargets...)
+}
+
+// snapshotCurrentClaim reads the claiming session's pointer exactly once for
+// this invocation. Federated store legs receive a copy of this snapshot; none
+// gets a fresh expected value after another leg has queried or claimed work.
+func (ops *hookClaimOps) snapshotCurrentClaim(env []string) error {
+	if ops.CurrentClaimReady {
+		return nil
+	}
+	ops.CurrentClaimReady = true
+	sessionID := hookClaimSessionID(env)
+	if sessionID == "" {
+		return nil
+	}
+	if ops.ReadSessionClaim == nil {
+		return fmt.Errorf("current claim snapshot unavailable: metadata CAS read seam missing")
+	}
+	current, err := ops.ReadSessionClaim(sessionID)
+	if err != nil {
+		return fmt.Errorf("reading current claim on session %s: %w", sessionID, err)
+	}
+	ops.CurrentClaimID = strings.TrimSpace(current)
+	return nil
+}
+
+// executionContext returns the exact context of the work ledger that owns the
+// current claim. The caller's session identity is deliberately not substituted
+// into this context.
+func (ops *hookClaimOps) executionContext(fallbackDir string, fallbackEnv []string) (string, []string) {
+	if ops != nil && ops.ExecutionReady {
+		return ops.ExecutionDir, ops.ExecutionEnv
+	}
+	return fallbackDir, fallbackEnv
+}
+
+func (ops *hookClaimOps) setExecutionFromResidence(res hookClaimResidence, fallbackDir string, fallbackEnv []string) {
+	if res.kind == hookClaimResidenceWork {
+		ops.ExecutionDir = res.work.dir
+		ops.ExecutionEnv = res.work.env
+	} else {
+		// A class binding has no bd workspace context. Keep the invocation's
+		// worktree context for branch inspection; routed writes use the class
+		// route's residence memo and never reach this fallback ledger.
+		ops.ExecutionDir = fallbackDir
+		ops.ExecutionEnv = fallbackEnv
+	}
+	ops.ExecutionReady = true
 }
 
 // claimWindowSpent reports whether this invocation's claim window has elapsed.
@@ -489,6 +631,7 @@ func refuseExpiredHookClaimWindow(candidateID string, ops hookClaimOps, stderr i
 func claimFirstReadyHookAssignment(candidates []beads.Bead, opts hookClaimOptions, ops hookClaimOps, dir string, stdout, stderr io.Writer) hookClaimResult {
 	ctx, cancel := ops.claimMutationContext()
 	defer cancel()
+	executionDir, executionEnv := ops.executionContext(dir, opts.Env)
 	claimsErrored := false
 	for _, candidate := range candidates {
 		if strings.TrimSpace(candidate.ID) == "" ||
@@ -513,7 +656,7 @@ func claimFirstReadyHookAssignment(candidates []beads.Bead, opts hookClaimOption
 		// or alias; bd's idempotent --claim path requires the actor to match the
 		// existing assignee exactly.
 		claimActor := strings.TrimSpace(candidate.Assignee)
-		claimed, ok, err := ops.Claim(ctx, dir, opts.Env, candidate.ID, claimActor)
+		claimed, ok, err := ops.Claim(ctx, executionDir, executionEnv, candidate.ID, claimActor)
 		if err != nil {
 			if !ok && (hookClaimBeadIsElsewhere(err) || hookClaimBindingRefusedTheClaim(err)) {
 				// The read federated and the write did not: the assigned tier
@@ -579,7 +722,7 @@ func claimFirstReadyHookAssignment(candidates []beads.Bead, opts hookClaimOption
 		if result.Assignee == "" {
 			result.Assignee = claimActor
 		}
-		return hookClaimResult{terminal: true, code: writeHookClaimWorkResultForBead(result, claimed, opts, ops, dir, true, stdout, stderr)}
+		return hookClaimResult{terminal: true, code: writeHookClaimWorkResultForBead(result, claimed, opts, ops, executionDir, true, stdout, stderr)}
 	}
 	return hookClaimResult{claimsErrored: claimsErrored}
 }
@@ -612,6 +755,7 @@ func hookClaimBeadIsElsewhere(err error) bool {
 func claimFirstEligibleHookCandidate(candidates []beads.Bead, opts hookClaimOptions, ops hookClaimOps, dir string, stdout, stderr io.Writer) hookClaimResult {
 	ctx, cancel := ops.claimMutationContext()
 	defer cancel()
+	executionDir, executionEnv := ops.executionContext(dir, opts.Env)
 	claimsErrored := false
 	for _, candidate := range candidates {
 		if !hookCandidateClaimable(candidate, opts.RouteTargets) {
@@ -630,7 +774,7 @@ func claimFirstEligibleHookCandidate(candidates []beads.Bead, opts hookClaimOpti
 			// next tick (NDI).
 			break
 		}
-		claimed, ok, err := ops.Claim(ctx, dir, opts.Env, candidate.ID, opts.Assignee)
+		claimed, ok, err := ops.Claim(ctx, executionDir, executionEnv, candidate.ID, opts.Assignee)
 		if err != nil {
 			if ok {
 				// The atomic mutation committed, but its canonical readback failed.
@@ -670,7 +814,7 @@ func claimFirstEligibleHookCandidate(candidates []beads.Bead, opts hookClaimOpti
 		if result.Assignee == "" {
 			result.Assignee = opts.Assignee
 		}
-		return hookClaimResult{terminal: true, code: writeHookClaimWorkResultForBead(result, claimed, opts, ops, dir, true, stdout, stderr)}
+		return hookClaimResult{terminal: true, code: writeHookClaimWorkResultForBead(result, claimed, opts, ops, executionDir, true, stdout, stderr)}
 	}
 
 	return hookClaimResult{claimsErrored: claimsErrored}
@@ -744,6 +888,173 @@ func hookClaimCandidateIsMessage(candidate beads.Bead) bool {
 	return strings.EqualFold(strings.TrimSpace(candidate.Type), "message")
 }
 
+type hookClaimResidenceKind uint8
+
+const (
+	hookClaimResidenceUnknown hookClaimResidenceKind = iota
+	hookClaimResidenceWork
+	hookClaimResidenceClass
+)
+
+type hookClaimResidence struct {
+	kind hookClaimResidenceKind
+	work hookStore
+}
+
+type hookCurrentClaimResolution struct {
+	bead      beads.Bead
+	live      bool
+	open      bool
+	stale     bool
+	residence hookClaimResidence
+}
+
+type hookCurrentClaimClearResult uint8
+
+const (
+	hookCurrentClaimClearUnknown hookCurrentClaimClearResult = iota
+	hookCurrentClaimClearSwapped
+	hookCurrentClaimClearPointerChanged
+)
+
+// resolveHookCurrentClaim authoritatively resolves the pointer captured before
+// the work query. It reads each complete ordered work leg through exactly that
+// leg's dir/env. Only after every leg answers not-found does it probe the
+// relocated class binding. A live, currently-owned pointer blocks a fresh
+// different claim; terminal, missing, or no-longer-owned pointers are stale and
+// may be replaced by the later reservation CAS. Any other read failure fails
+// closed. The raw readers deliberately bypass class-routed ReadWorkMeta and
+// never invoke the query/ranking path.
+func resolveHookCurrentClaim(_ []beads.Bead, opts hookClaimOptions, ops hookClaimOps, dir string) (hookCurrentClaimResolution, error) {
+	pointer := strings.TrimSpace(ops.CurrentClaimID)
+	if pointer == "" || hookClaimSessionID(opts.Env) == "" {
+		return hookCurrentClaimResolution{}, nil
+	}
+	readLeg := ops.ReadWorkMeta
+	if ops.ClassRoute != nil {
+		// The class wrapper's ReadWorkMeta is deliberately not a pointer
+		// resolver: it probes/escalates from a single write context. Use only the
+		// raw leg reader captured before wrapping, and fail closed if unavailable.
+		readLeg = ops.ClassRoute.readLeg
+	}
+	if readLeg == nil {
+		return hookCurrentClaimResolution{}, fmt.Errorf("current claim %s cannot be resolved: work metadata read seam missing", pointer)
+	}
+	legs := ops.WorkLegs
+	if len(legs) == 0 {
+		legs = []hookStore{{dir: dir, env: opts.Env}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), hookClaimMutationTimeout)
+	defer cancel()
+	for _, leg := range legs {
+		bead, err := readLeg(ctx, leg.dir, leg.env, pointer, opts.Assignee)
+		if err == nil {
+			return classifyHookCurrentClaim(bead, opts, hookClaimResidence{kind: hookClaimResidenceWork, work: leg}), nil
+		}
+		if !errors.Is(err, beads.ErrNotFound) {
+			return hookCurrentClaimResolution{}, fmt.Errorf("reading current claim %s from work leg %q: %w", pointer, leg.dir, err)
+		}
+	}
+	if ops.ClassRoute != nil {
+		bead, found, err := ops.ClassRoute.readCurrentClaim(pointer)
+		if err != nil {
+			return hookCurrentClaimResolution{}, fmt.Errorf("reading current claim %s from relocated class binding: %w", pointer, err)
+		}
+		if found {
+			return classifyHookCurrentClaim(bead, opts, hookClaimResidence{kind: hookClaimResidenceClass}), nil
+		}
+	}
+	return hookCurrentClaimResolution{stale: true}, nil
+}
+
+func classifyHookCurrentClaim(bead beads.Bead, opts hookClaimOptions, residence hookClaimResidence) hookCurrentClaimResolution {
+	owned := hookClaimHasIdentity(bead.Assignee, opts.IdentityCandidates)
+	switch {
+	case !owned:
+		return hookCurrentClaimResolution{stale: true, residence: residence}
+	case hookClaimCandidateIsMessage(bead):
+		return hookCurrentClaimResolution{stale: true, residence: residence}
+	case strings.EqualFold(strings.TrimSpace(bead.Status), "in_progress"):
+		return hookCurrentClaimResolution{bead: bead, live: true, residence: residence}
+	case strings.EqualFold(strings.TrimSpace(bead.Status), "open"):
+		return hookCurrentClaimResolution{bead: bead, live: true, open: true, residence: residence}
+	default:
+		return hookCurrentClaimResolution{stale: true, residence: residence}
+	}
+}
+
+// A reserve error is safe to compensate only when the CAS was definitely not
+// attempted. Once the writer may have run, the error is commit-ambiguous: the
+// minted work must remain parked until reconciliation proves the pointer state.
+func hookCurrentClaimReserveErrorDefiniteNoCommit(err error) bool {
+	return errors.Is(err, beads.ErrConditionalWriteUnsupported) ||
+		errors.Is(err, session.ErrCurrentClaimCASNotAttempted)
+}
+
+// removeHookCurrentCandidate prevents a stale authoritative pointer from being
+// re-adopted from a stale work-query projection after its bead was terminal or
+// changed hands.
+func removeHookCurrentCandidate(candidates []beads.Bead, pointer string) []beads.Bead {
+	pointer = strings.TrimSpace(pointer)
+	if pointer == "" {
+		return candidates
+	}
+	out := candidates[:0]
+	for _, candidate := range candidates {
+		if strings.TrimSpace(candidate.ID) != pointer {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+// reserveHookCurrentClaim fences the session pointer before any downstream
+// work metadata, lifecycle event, continuation assignment, or result output.
+// Same-bead adoption is idempotent and needs no write. Every other transition
+// uses the one invocation snapshot as its expected value.
+func reserveHookCurrentClaim(bead beads.Bead, opts hookClaimOptions, ops *hookClaimOps, minted bool, dir string, stderr io.Writer) int {
+	sessionID := hookClaimSessionID(opts.Env)
+	if sessionID == "" || strings.TrimSpace(ops.CurrentClaimID) == strings.TrimSpace(bead.ID) {
+		return 0
+	}
+	if ops.ReserveSessionClaim == nil {
+		cause := fmt.Sprintf("reserving current claim %s: metadata CAS seam missing", bead.ID)
+		return unwindCurrentClaimReservationFailure(cause, bead, opts, ops, dir, minted, stderr)
+	}
+	outcome, err := ops.ReserveSessionClaim(sessionID, ops.CurrentClaimID, bead.ID)
+	if err == nil && (outcome == beads.MetadataCASSwapped || outcome == beads.MetadataCASAlreadyNext) {
+		ops.CurrentClaimID = strings.TrimSpace(bead.ID)
+		return 0
+	}
+	if err != nil {
+		if !hookCurrentClaimReserveErrorDefiniteNoCommit(err) {
+			fmt.Fprintf(stderr, "gc hook --claim: reserving current claim %s is commit-ambiguous: %v; leaving the minted claim parked for reconciliation\n", bead.ID, err) //nolint:errcheck
+			return 1
+		}
+		return unwindCurrentClaimReservationFailure(
+			fmt.Sprintf("reserving current claim %s: %v", bead.ID, err), bead, opts, ops, dir, minted, stderr)
+	}
+	if outcome == beads.MetadataCASConflict {
+		return unwindCurrentClaimReservationFailure(
+			fmt.Sprintf("reserving current claim %s lost to another claim (expected %q)", bead.ID, ops.CurrentClaimID),
+			bead, opts, ops, dir, minted, stderr)
+	}
+	fmt.Fprintf(stderr, "gc hook --claim: reserving current claim %s returned unrecognized CAS outcome %q; leaving the minted claim parked for reconciliation\n", bead.ID, outcome) //nolint:errcheck
+	return 1
+}
+
+// unwindCurrentClaimReservationFailure compensates only a claim minted by this
+// invocation. It never clears the session pointer: a CAS conflict means the
+// pointer belongs to the winner, and a reservation error means this invocation
+// never established ownership of it.
+func unwindCurrentClaimReservationFailure(cause string, bead beads.Bead, opts hookClaimOptions, ops *hookClaimOps, dir string, minted bool, stderr io.Writer) int {
+	if minted {
+		return unwindUndeliveredHookClaim(hookClaimReleaseReasonPointerCAS, cause, bead, opts, *ops, dir, stderr)
+	}
+	fmt.Fprintf(stderr, "gc hook --claim: %s\n", cause) //nolint:errcheck
+	return 1
+}
+
 // writeHookClaimWorkResultForBead stamps, correlates and reports one claimed or
 // adopted bead.
 //
@@ -753,6 +1064,7 @@ func hookClaimCandidateIsMessage(candidate beads.Bead) bool {
 // turn legitimately made. A held claim that goes undelivered is re-served to the
 // next turn by the existing-assignment tier instead.
 func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead, opts hookClaimOptions, ops hookClaimOps, dir string, minted bool, stdout, stderr io.Writer) int {
+	executionDir, executionEnv := ops.executionContext(dir, opts.Env)
 	// F-B straddle. The CAS was STARTED inside the window and LANDED outside it:
 	// the claim-write child carries its own ceiling, so a claim can commit after
 	// the invoking turn is already gone. That is the same parked claim by another
@@ -762,13 +1074,15 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 			bead.ID, ops.claimWindowOrDefault(), ops.invocationAge().Round(time.Millisecond))
 		return unwindUndeliveredHookClaim(hookClaimReleaseReasonStraddled, cause, bead, opts, ops, dir, stderr)
 	}
+	if code := reserveHookCurrentClaim(bead, opts, &ops, minted, dir, stderr); code != 0 {
+		return code
+	}
 	result.RootBeadID = strings.TrimSpace(bead.Metadata[beadmeta.RootBeadIDMetadataKey])
 	result.ContinuationGroup = strings.TrimSpace(bead.Metadata[beadmeta.ContinuationGroupMetadataKey])
 	durable, stamped := stampHookClaimIdentity(bead, opts, ops, dir, stderr)
 	if stamped && hookClaimLifecycleCandidate(durable, opts) {
-		ops.EmitExecutionStepStarted(durable, dir, opts.Env, opts.Assignee)
+		ops.EmitExecutionStepStarted(durable, executionDir, executionEnv, opts.Assignee)
 	}
-	stampHookSessionCurrentClaim(bead, opts, ops, stderr)
 	publishHookClaimRunMap(bead, opts, ops, stderr)
 	assigned, err := preassignHookContinuationGroup(bead, opts, ops, dir)
 	if err != nil {
@@ -786,15 +1100,19 @@ func writeHookClaimWorkResultForBead(result hookClaimJSONResult, bead beads.Bead
 			fmt.Fprintf(stderr, "gc hook --claim: %s\n", cause) //nolint:errcheck
 			return 1
 		}
-		// stampHookSessionCurrentClaim above advertised this bead as the session's
-		// current claim before the result write; a minted claim is now being given
-		// back, so clear the stamp as part of the same rollback surface as
+		// The current-claim reservation above advertised this bead before the
+		// result write; a minted claim is now being given back, so clear the pointer
+		// as part of the same rollback surface as
 		// ops.Release. Clear BEFORE the release (matching the session_beads.go
 		// cascade order) so `gc hook current` can never hand a later formula step a
 		// bead this session no longer owns — the "close somebody else's bead" hazard
 		// this back-channel exists to prevent. The straddle path (F-B) needs no clear
 		// because it returns before the stamp.
-		clearHookSessionCurrentClaim(opts, ops, stderr)
+		clearResult := clearHookSessionCurrentClaim(opts, ops, bead.ID, stderr)
+		if clearResult == hookCurrentClaimClearUnknown {
+			fmt.Fprintf(stderr, "gc hook --claim: leaving undelivered claim %s parked because current-claim clear was not confirmed\n", bead.ID) //nolint:errcheck
+			return 1
+		}
 		return unwindUndeliveredHookClaim(hookClaimReleaseReasonUndelivered, cause, bead, opts, ops, dir, stderr)
 	}
 	return 0
@@ -853,7 +1171,8 @@ func unwindUndeliveredHookClaim(reason, cause string, bead beads.Bead, opts hook
 	// window is already spent, and the unwind must still be allowed to run.
 	ctx, cancel := context.WithTimeout(context.Background(), hookClaimMutationTimeout)
 	defer cancel()
-	released, err := ops.Release(ctx, dir, opts.Env, bead.ID, assignee)
+	executionDir, executionEnv := ops.executionContext(dir, opts.Env)
+	released, err := ops.Release(ctx, executionDir, executionEnv, bead.ID, assignee)
 	if released && err == nil {
 		ops.EmitClaimReleased(hookClaimReleaseRecord{BeadID: bead.ID, Assignee: assignee, Reason: reason})
 	}
@@ -972,7 +1291,8 @@ func preassignHookContinuationGroup(bead beads.Bead, opts hookClaimOptions, ops 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), hookClaimMutationTimeout)
 	defer cancel()
-	siblings, err := ops.ListContinuation(ctx, dir, opts.Env, rootID, group)
+	executionDir, executionEnv := ops.executionContext(dir, opts.Env)
+	siblings, err := ops.ListContinuation(ctx, executionDir, executionEnv, rootID, group)
 	if err != nil {
 		return nil, err
 	}
@@ -985,7 +1305,7 @@ func preassignHookContinuationGroup(bead beads.Bead, opts hookClaimOptions, ops 
 			!hookClaimMatchesRoute(sibling, opts.RouteTargets) {
 			continue
 		}
-		if err := ops.AssignContinuation(ctx, dir, opts.Env, sibling.ID, opts.Assignee); err != nil {
+		if err := ops.AssignContinuation(ctx, executionDir, executionEnv, sibling.ID, opts.Assignee); err != nil {
 			return assigned, fmt.Errorf("assigning %s: %w", sibling.ID, err)
 		}
 		assigned = append(assigned, sibling.ID)
@@ -1068,7 +1388,8 @@ func hookClaimThroughStore(beadID, assignee string, claim func() (beads.Bead, bo
 // stamped only when absent, never touched again once set. Best-effort: a missing
 // repo, detached HEAD, absent session, or write error never blocks the claim.
 func stampHookClaimIdentity(bead beads.Bead, opts hookClaimOptions, ops hookClaimOps, dir string, stderr io.Writer) (beads.Bead, bool) {
-	patch := hookClaimIdentityPatch(bead, opts, ops, dir)
+	executionDir, executionEnv := ops.executionContext(dir, opts.Env)
+	patch := hookClaimIdentityPatch(bead, opts, ops, executionDir)
 	sessionID := hookClaimSessionID(opts.Env)
 	needsLifecycleIdentity := sessionID != "" && !beadmeta.IsControlKind(strings.TrimSpace(bead.Metadata[beadmeta.KindMetadataKey]))
 	if len(patch) == 0 {
@@ -1077,14 +1398,14 @@ func stampHookClaimIdentity(bead beads.Bead, opts hookClaimOptions, ops hookClai
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), hookClaimMutationTimeout)
 	defer cancel()
-	if err := ops.StampWorkMeta(ctx, dir, opts.Env, bead.ID, opts.Assignee, patch); err != nil {
+	if err := ops.StampWorkMeta(ctx, executionDir, executionEnv, bead.ID, opts.Assignee, patch); err != nil {
 		fmt.Fprintf(stderr, "gc hook --claim: stamping execution identity on %s: %v\n", bead.ID, err) //nolint:errcheck
 		return beads.Bead{}, false
 	}
 	if !needsLifecycleIdentity {
 		return beads.Bead{}, false
 	}
-	readback, err := ops.ReadWorkMeta(ctx, dir, opts.Env, bead.ID, opts.Assignee)
+	readback, err := ops.ReadWorkMeta(ctx, executionDir, executionEnv, bead.ID, opts.Assignee)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc hook --claim: reading stamped execution identity on %s: %v\n", bead.ID, err) //nolint:errcheck
 		return beads.Bead{}, false
@@ -1181,62 +1502,40 @@ func hookEmitExecutionStepStarted(step beads.Bead, dir string, env []string, ass
 	_ = executionevent.EmitLifecycle(rec, hookClaimBdStore(dir, env, assignee), events.ExecutionStepStarted, step, eventActor())
 }
 
-// stampHookSessionCurrentClaim records the claimed bead id on the CLAIMING
-// SESSION's own bead (beadmeta.CurrentClaimBeadIDMetadataKey), the reverse
-// direction from stampHookClaimIdentity's work-bead back-reference.
-//
-// It exists because a claimed step id is otherwise UNREACHABLE from the step's
-// own shell: GC_BEAD_ID / GC_TRIGGER_BEAD_ID are set only in the dispatch
-// condition-script environment (internal/convergence/condition.go), never in a
-// pool session, so a formula step that must close the bead it is running had no
-// way to name it and silently skipped its own close — work that did nothing
-// reported green. `gc hook current` reads this stamp back and closes that gap.
-//
-// Unlike the work-bead session back-reference this is stamped for CONTROL beads
-// too: that exclusion exists because a control step must stay session-free by
-// graphroute's design, which is a statement about the WORK bead's metadata. A
-// control-dispatcher session running a control step needs to name its own bead
-// exactly as much as any other worker does.
-//
-// Best-effort: the write is guarded and compare-and-skipped inside
-// session.Store.SetCurrentClaim, and a failure is reported on stderr but never
-// fails the claim. The loud refusal for a step that cannot name its bead belongs
-// at the point of use, not here.
-func stampHookSessionCurrentClaim(bead beads.Bead, opts hookClaimOptions, ops hookClaimOps, stderr io.Writer) {
-	sessionID := hookClaimSessionID(opts.Env)
-	beadID := strings.TrimSpace(bead.ID)
-	if sessionID == "" || beadID == "" {
-		return
-	}
-	if err := ops.StampSessionClaim(sessionID, beadID); err != nil {
-		fmt.Fprintf(stderr, "gc hook --claim: recording current claim %s on session %s: %v\n", beadID, sessionID, err) //nolint:errcheck
-	}
-}
-
 // clearHookSessionCurrentClaim removes the session-side current-claim stamp when
-// a claim this invocation recorded is being given back, so a released bead is
-// never left advertised as the session's current claim. It is the inverse of
-// stampHookSessionCurrentClaim and deliberately routes the clear through the same
-// ops.StampSessionClaim seam — an empty bead id, which session.Store.SetCurrentClaim
-// treats as a clear — so it reaches the SAME relocation-aware session front door the
-// stamp used. Clearing through the store-cascade helper instead
-// (clearSessionCurrentClaim, sessionFrontDoor(store)) would risk missing a relocated
-// session binding the stamp wrote to.
+// a minted claim's result cannot be delivered. It uses expected-value CAS, so a
+// later winner's pointer is preserved. The clear reaches the same relocation-
+// aware front door as reservation through ops.ClearSessionClaim.
 //
-// Best-effort with the stamp's own error handling: a failure is reported on stderr
-// but changes no exit code, because on this path the compensating action is
-// ops.Release and the stamp clear is part of that same rollback surface — the caller
-// clears BEFORE releasing so a freed bead is never simultaneously claimable by
-// another seat and still named by this session (the ordering session_beads.go's
-// cascade already relies on).
-func clearHookSessionCurrentClaim(opts hookClaimOptions, ops hookClaimOps, stderr io.Writer) {
+// The caller may release the work bead only for Swapped or PointerChanged. An
+// error is commit-ambiguous, so the claim stays parked until reconciliation can
+// establish whether this process or a later winner owns the pointer.
+func clearHookSessionCurrentClaim(opts hookClaimOptions, ops hookClaimOps, expected string, stderr io.Writer) hookCurrentClaimClearResult {
 	sessionID := hookClaimSessionID(opts.Env)
 	if sessionID == "" {
-		return
+		// No session pointer exists on this invocation, so there is no
+		// session-side advertisement that could outlive the work release.
+		return hookCurrentClaimClearPointerChanged
 	}
-	if err := ops.StampSessionClaim(sessionID, ""); err != nil {
+	if ops.ClearSessionClaim == nil {
+		fmt.Fprintf(stderr, "gc hook --claim: clearing current claim on session %s: metadata CAS seam missing\n", sessionID) //nolint:errcheck
+		return hookCurrentClaimClearUnknown
+	}
+	outcome, err := ops.ClearSessionClaim(sessionID, expected)
+	if err != nil {
 		fmt.Fprintf(stderr, "gc hook --claim: clearing current claim on session %s: %v\n", sessionID, err) //nolint:errcheck
+		return hookCurrentClaimClearUnknown
 	}
+	if outcome == beads.MetadataCASConflict {
+		// Another same-session claimant won after this result pipe failed. Its
+		// pointer is authoritative; the conditional clear intentionally leaves it.
+		return hookCurrentClaimClearPointerChanged
+	}
+	if outcome == beads.MetadataCASSwapped || outcome == beads.MetadataCASAlreadyNext {
+		return hookCurrentClaimClearSwapped
+	}
+	fmt.Fprintf(stderr, "gc hook --claim: clearing current claim on session %s: unrecognized CAS outcome %q\n", sessionID, outcome) //nolint:errcheck
+	return hookCurrentClaimClearUnknown
 }
 
 // publishHookClaimRunMap publishes the claimed bead's resolved run ID for the
@@ -1245,10 +1544,10 @@ func clearHookSessionCurrentClaim(opts hookClaimOptions, ops hookClaimOps, stder
 // prefix-colliding session if the intended session disappears concurrently.
 // The run map is independent, best-effort telemetry and preserves useful
 // correlation without issuing that unsafe second store mutation. (The one
-// session-bead write the claim does make, stampHookSessionCurrentClaim, goes
-// through the session front door's exact-id/session-bead-validated
-// SetCurrentClaim, which refuses the fuzzy redirect this comment describes
-// rather than risking it.)
+// session-bead write the claim does make, the current-claim reservation, goes
+// through the session front door's exact-id/session-bead-validated metadata CAS,
+// which refuses the fuzzy redirect this comment describes rather than risking
+// it.)
 func publishHookClaimRunMap(bead beads.Bead, opts hookClaimOptions, ops hookClaimOps, stderr io.Writer) {
 	sessionBeadID := hookClaimSessionID(opts.Env)
 	if sessionBeadID == "" {

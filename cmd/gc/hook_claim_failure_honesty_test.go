@@ -29,6 +29,10 @@ type failureHookHarness struct {
 	calls   map[string]int
 	drained bool
 	events  []events.Event
+	// currentClaim is the session's value-CAS pointer. These tests intentionally
+	// keep session identity in scope: the claim path must snapshot and reserve it
+	// through the same expected-value contract as production.
+	currentClaim string
 }
 
 type hookRunnerAnswer struct {
@@ -67,10 +71,51 @@ func (h *failureHookHarness) ops() hookClaimOps {
 		PublishRunMap:            func(string, string, ...string) error { return nil },
 		EmitExecutionStepStarted: func(beads.Bead, string, []string, string) {},
 		EmitClaimRejected:        func(string, string, string) {},
+		ReadSessionClaim:         h.readSessionClaim,
+		ReserveSessionClaim:      h.reserveSessionClaim,
+		ClearSessionClaim:        h.clearSessionClaim,
+		StampWorkMeta:            func(context.Context, string, []string, string, string, map[string]string) error { return nil },
+		ReadWorkMeta: func(_ context.Context, _ string, _ []string, beadID, assignee string) (beads.Bead, error) {
+			return beads.Bead{ID: beadID, Status: "in_progress", Assignee: assignee, Metadata: map[string]string{
+				"gc.session_id": "gcs-1",
+			}}, nil
+		},
 		ListContinuation: func(context.Context, string, []string, string, string) ([]beads.Bead, error) {
 			return nil, nil
 		},
 	}
+}
+
+func (h *failureHookHarness) readSessionClaim(sessionID string) (string, error) {
+	if sessionID != "gcs-1" {
+		return "", errors.New("unexpected session id in current-claim read")
+	}
+	return h.currentClaim, nil
+}
+
+func (h *failureHookHarness) reserveSessionClaim(sessionID, expected, next string) (beads.MetadataCASOutcome, error) {
+	if sessionID != "gcs-1" {
+		return "", errors.New("unexpected session id in current-claim reserve")
+	}
+	if strings.TrimSpace(next) == "" {
+		return "", errors.New("current-claim reserve requires a next bead")
+	}
+	if h.currentClaim != expected {
+		return beads.MetadataCASConflict, nil
+	}
+	h.currentClaim = next
+	return beads.MetadataCASSwapped, nil
+}
+
+func (h *failureHookHarness) clearSessionClaim(sessionID, expected string) (beads.MetadataCASOutcome, error) {
+	if sessionID != "gcs-1" {
+		return "", errors.New("unexpected session id in current-claim clear")
+	}
+	if h.currentClaim != expected {
+		return beads.MetadataCASConflict, nil
+	}
+	h.currentClaim = ""
+	return beads.MetadataCASSwapped, nil
 }
 
 func (h *failureHookHarness) emitFailure(command string, err error) {

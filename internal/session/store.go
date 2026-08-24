@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -9,6 +10,12 @@ import (
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 )
+
+// ErrCurrentClaimCASNotAttempted marks validation failures that occur before
+// ReserveCurrentClaim reaches the metadata CAS writer. Callers may safely
+// compensate a minted claim for this class; a transport error after the CAS
+// starts is commit-ambiguous and must remain parked.
+var ErrCurrentClaimCASNotAttempted = errors.New("current claim CAS not attempted")
 
 // This file extends the session-class domain wrapper (Store) with the
 // WRITE half of the front door per OBJECT-MODEL-FRONT-DOOR-DESIGN sec 3.1. The
@@ -224,6 +231,33 @@ func (s *Store) SetCurrentClaim(id, beadID string) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+// ReserveCurrentClaim conditionally reserves the work bead named by beadID on
+// the session bead id. The reservation is a metadata value-CAS: expected is
+// replaced with beadID only when the session pointer still has that exact
+// value. A conflict is an ordinary concurrent-claim result, not a store error.
+//
+// The session bead is validated before the CAS so an exact session id is always
+// used; unlike SetCurrentClaim this method never falls back to an unconditional
+// metadata write when the backing store lacks the CAS capability.
+func (s *Store) ReserveCurrentClaim(id, expected, beadID string) (beads.MetadataCASOutcome, error) {
+	b, err := s.validatedBead(id)
+	if err != nil {
+		return "", fmt.Errorf("%w: validating session bead %q: %v", ErrCurrentClaimCASNotAttempted, id, err)
+	}
+	return beads.ApplyMetadataCAS(s.store.Store, b.ID,
+		beadmeta.CurrentClaimBeadIDMetadataKey,
+		strings.TrimSpace(expected), strings.TrimSpace(beadID))
+}
+
+// ClearCurrentClaim conditionally clears the session's current-claim pointer
+// only when it still names expected. This is the compensating operation for a
+// minted claim whose result could not be delivered; a later winner's pointer
+// must survive that unwind. Unsupported CAS and transport failures are
+// returned to the caller rather than degraded to SetCurrentClaim.
+func (s *Store) ClearCurrentClaim(id, expected string) (beads.MetadataCASOutcome, error) {
+	return s.ReserveCurrentClaim(id, expected, "")
 }
 
 // CurrentClaimBeadID returns the id of the work bead this session most recently

@@ -52,7 +52,7 @@ package main
 //
 // The escalation is therefore a property of the whole fan-out, not of one leg.
 // Before a not-found opens it, every OTHER leg is READ for the same id
-// (anotherWorkLegHolds), and a leg that holds the bead closes it: the work
+// (workLegHolds), and a leg that holds the bead closes it: the work
 // store's answer stands, the federated loop drops the leg that could not resolve
 // it, and the leg that holds it claims it on the next turn of the same
 // invocation — at its own rank, not behind whatever else the fan-out is
@@ -162,7 +162,8 @@ type hookClaimClassRoute struct {
 	class beads.Store
 	graph storebinding.GraphStore
 
-	resident map[string]bool
+	resident      map[string]bool
+	residentBeads map[string]beads.Bead
 
 	// workLegs is the whole work fan-out this invocation claims across, and
 	// readLeg reads one bead through one leg's bd context. Both are empty on a
@@ -201,10 +202,11 @@ func newHookClaimClassRoute(class beads.Store) (*hookClaimClassRoute, error) {
 // created, so a route can never reach the escalation with a nil map.
 func newClaimClassRouteOver(class beads.Store, graph storebinding.GraphStore) *hookClaimClassRoute {
 	return &hookClaimClassRoute{
-		class:    class,
-		graph:    graph,
-		resident: map[string]bool{},
-		workHeld: map[string]bool{},
+		class:         class,
+		graph:         graph,
+		resident:      map[string]bool{},
+		residentBeads: map[string]beads.Bead{},
+		workHeld:      map[string]bool{},
 	}
 }
 
@@ -290,10 +292,11 @@ func (r *hookClaimClassRoute) holds(id string) (bool, error) {
 	if known, ok := r.resident[id]; ok {
 		return known, nil
 	}
-	_, err := r.graph.Get(id)
+	bead, err := r.graph.Get(id)
 	switch {
 	case err == nil:
 		r.resident[id] = true
+		r.residentBeads[id] = bead
 		return true, nil
 	case errors.Is(err, beads.ErrNotFound):
 		r.resident[id] = false
@@ -302,6 +305,36 @@ func (r *hookClaimClassRoute) holds(id string) (bool, error) {
 		return false, nil
 	default:
 		return false, fmt.Errorf("reading %q from the relocated class binding: %w", id, err)
+	}
+}
+
+// readCurrentClaim is the raw class-binding reader used only after every work
+// leg answered not-found. A successful probe records both residence and the
+// bead so all downstream writes can route without another residence read.
+// Standing refusal keeps the existing holds policy: a work-shaped id treats it
+// as the class binding having no answer, while a class-reserved id fails closed.
+func (r *hookClaimClassRoute) readCurrentClaim(id string) (beads.Bead, bool, error) {
+	id = strings.TrimSpace(id)
+	if r == nil || id == "" {
+		return beads.Bead{}, false, nil
+	}
+	if bead, ok := r.residentBeads[id]; ok {
+		return bead, true, nil
+	}
+	bead, err := r.graph.Get(id)
+	switch {
+	case err == nil:
+		r.resident[id] = true
+		r.residentBeads[id] = bead
+		return bead, true, nil
+	case errors.Is(err, beads.ErrNotFound):
+		r.resident[id] = false
+		return beads.Bead{}, false, nil
+	case isStandingStorageRefusal(err) && !bdIDIsClassReserved(id):
+		r.resident[id] = false
+		return beads.Bead{}, false, nil
+	default:
+		return beads.Bead{}, false, err
 	}
 }
 
@@ -321,13 +354,13 @@ func (r *hookClaimClassRoute) routes(ctx context.Context, from hookStore, id, as
 	if r == nil || !hookClaimBeadIsElsewhere(workErr) {
 		return false, nil
 	}
-	if r.anotherWorkLegHolds(ctx, from, id, assignee) {
+	if r.workLegHolds(ctx, from, id, assignee) {
 		return false, nil
 	}
 	return r.holds(id)
 }
 
-// anotherWorkLegHolds reports whether some work leg OTHER than the one that
+// workLegHolds reports whether some work leg OTHER than the one that
 // answered can resolve id.
 //
 // Only the primary leg runs the city-wide reader (scopeFederatedHookStores), so
@@ -342,7 +375,7 @@ func (r *hookClaimClassRoute) routes(ctx context.Context, from hookStore, id, as
 // in that direction is one skipped bead, reclaimed next tick; the consequence of
 // guessing wrong in the other is an ownership write in a ledger that is not
 // where the reader is looking.
-func (r *hookClaimClassRoute) anotherWorkLegHolds(ctx context.Context, from hookStore, id, assignee string) bool {
+func (r *hookClaimClassRoute) workLegHolds(ctx context.Context, from hookStore, id, assignee string) bool {
 	id = strings.TrimSpace(id)
 	if id == "" || r.readLeg == nil || len(r.workLegs) == 0 {
 		return false
@@ -379,9 +412,16 @@ func (r *hookClaimClassRoute) observeWorkLegs(stores []hookStore) {
 // the work store so the two claim paths report a lost race, a stale projection
 // and a canonical-readback failure identically.
 func (r *hookClaimClassRoute) claim(beadID, assignee string) (beads.Bead, bool, error) {
-	return hookClaimThroughStore(beadID, assignee,
+	bead, ok, err := hookClaimThroughStore(beadID, assignee,
 		func() (beads.Bead, bool, error) { return r.graph.Claim(beadID, assignee) },
 		r.graph.Get)
+	if ok {
+		r.resident[strings.TrimSpace(beadID)] = true
+		if bead.ID != "" {
+			r.residentBeads[strings.TrimSpace(beadID)] = bead
+		}
+	}
+	return bead, ok, err
 }
 
 // listContinuation reads a continuation group out of the binding and records

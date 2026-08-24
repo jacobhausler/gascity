@@ -305,9 +305,9 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	// would keep retrying the plain failure instead of seeing the terminal
 	// stale-session drain result and exiting. The fence reads the runtime's own
 	// identity from the environment; it is a no-op for a non-session runtime (no
-	// GC_SESSION_ID / GC_INSTANCE_TOKEN) and fails open for an eligible session or a
-	// transient session-store fault, so a healthy worker still falls through to the
-	// suspension and config checks below.
+	// GC_SESSION_ID / GC_INSTANCE_TOKEN) and proceeds for an eligible session; a
+	// transient session-store fault fails closed because the current claim cannot
+	// be snapshotted safely.
 	if opts.Claim {
 		// F-A, at the earliest point that can answer it. tryHookClaim carries the
 		// same fence over the same predicate — it is the seam every ops-level
@@ -416,7 +416,8 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	queryEnv := mergeRuntimeEnv(os.Environ(), overrides)
 	failureTemplate, emitFailureEvent := hookWorkQueryFailureTemplate(len(args) > 0, sessionTemplateContext, a.QualifiedName())
 
-	stores := hookWorkQueryStores(cityPath, cfg, &a, agentForQuery, workDir, queryEnv, overrides)
+	workLegs := hookWorkQueryStores(cityPath, cfg, &a, agentForQuery, workDir, queryEnv, overrides)
+	stores := workLegs
 	// On a split city the ready tiers of workQuery are already city-wide, so
 	// running the whole query once per store re-asks the same question R+1 times
 	// and re-opens every leg each time. Pin the city-wide read to the primary
@@ -476,7 +477,7 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 			DrainAck:     opts.DrainAck,
 			JSON:         opts.JSON,
 		}
-		return claimHookWork(cityPath, workQuery, workDir, queryEnv, stores, claimOpts, emitQueryFailure, stdout, stderr)
+		return claimHookWork(cityPath, workQuery, workDir, queryEnv, stores, workLegs, claimOpts, emitQueryFailure, stdout, stderr)
 	}
 	return doHook(workQuery, workDir, false, runner, stdout, stderr)
 }
@@ -498,21 +499,20 @@ const (
 	// hookClaimSessionStoreUnavailable: the session store could not be opened, or
 	// its read failed for a reason other than a confirmed-missing or non-session
 	// bead. That is a transient infrastructure fault, not a definitive
-	// ineligibility, so the caller fails open into the normal claim path (whose
-	// runner surfaces and escalates its own store errors) rather than mislabeling
-	// the fault as a stale session. A bead that is confirmed absent or resolves to
-	// a non-session bead is NOT this verdict — it is a definitive identity failure
-	// and classified stale.
+	// ineligibility; the caller nevertheless fails closed because it cannot safely
+	// snapshot current-claim ownership. A bead that is confirmed absent or
+	// resolves to a non-session bead is NOT this verdict — it is a definitive
+	// identity failure and classified stale.
 	hookClaimSessionStoreUnavailable
 )
 
 // fenceHookClaimSession applies the runtime-identity fence that gates
 // gc hook --claim before it runs the work query. It returns (code, handled):
-// handled is true only for a definitively stale session, whose terminal drain
-// result the caller must return as-is. An un-fenceable context (no session id or
-// no instance token), an eligible session, or a transient session-store fault all
-// return handled=false so the normal claim path runs — the fence never turns an
-// infrastructure hiccup or an in-progress start into a false refusal.
+// handled is true for a definitively stale session (whose terminal drain result
+// the caller must return as-is) or an unavailable session store (whose claim is
+// refused without a drain). An un-fenceable context (no session id or no
+// instance token) or an eligible session returns handled=false so the normal
+// claim path runs.
 func fenceHookClaimSession(cityPath string, cfg *config.City, sessionID string, opts hookCommandOptions, stdout, stderr io.Writer) (int, bool) {
 	instanceToken := strings.TrimSpace(os.Getenv("GC_INSTANCE_TOKEN"))
 	if sessionID == "" || instanceToken == "" {
@@ -523,11 +523,12 @@ func fenceHookClaimSession(cityPath string, cfg *config.City, sessionID string, 
 		fmt.Fprintf(stderr, "gc hook --claim: refusing stale session %s: %s\n", sessionID, reason) //nolint:errcheck
 		return writeHookClaimStaleSessionDrain(opts, stdout, stderr), true
 	case hookClaimSessionStoreUnavailable:
-		// Fail open: let the claim path run and surface/escalate its own store
-		// error rather than reporting a false stale session. Name the fault
-		// without the alarming "stale session" wording.
-		fmt.Fprintf(stderr, "gc hook --claim: session fence unavailable for %s: %s; proceeding to claim\n", sessionID, reason) //nolint:errcheck
-		return 0, false
+		// A current-claim snapshot is part of the ownership fence. If the session
+		// front door cannot answer, claiming fresh work could replace an unknown
+		// live assignment, so fail closed without emitting a drain or entering the
+		// work-query path.
+		fmt.Fprintf(stderr, "gc hook --claim: session fence unavailable for %s: %s; refusing claim\n", sessionID, reason) //nolint:errcheck
+		return 1, true
 	default:
 		return 0, false
 	}
@@ -538,7 +539,7 @@ func fenceHookClaimSession(cityPath string, cfg *config.City, sessionID string, 
 // failure — the session bead is absent, or resolves to a non-session bead — is a
 // stale verdict: the incarnation can no longer prove its identity and must drain
 // rather than claim. Only a genuine store-open or read fault yields
-// hookClaimSessionStoreUnavailable (transient, fails open), so an infrastructure
+// hookClaimSessionStoreUnavailable (transient, fails closed), so an infrastructure
 // hiccup is not mislabeled as staleness AND a vanished session is not laundered
 // into an infrastructure hiccup that lets a stale runtime reach the claim path.
 func classifyHookClaimSession(cityPath string, cfg *config.City, sessionID, instanceToken string) (hookClaimSessionVerdict, string) {
@@ -559,9 +560,8 @@ func classifyHookClaimSession(cityPath string, cfg *config.City, sessionID, inst
 // id resolves to a bead that is not a session) as session.ErrSessionNotFound.
 // Both are definitive identity failures — the runtime's session no longer exists
 // in the store — so the incarnation is stale and must drain. Any other error is a
-// genuine store open/read fault the fence fails open on, letting the normal claim
-// path surface and escalate its own store error rather than refusing a healthy
-// worker over an infrastructure hiccup.
+// genuine store open/read fault and fails closed: the current-claim pointer cannot
+// be snapshotted safely, so the normal claim path must not replace unknown work.
 func classifyHookClaimSessionLookupError(err error) (hookClaimSessionVerdict, string) {
 	switch {
 	case errors.Is(err, beads.ErrNotFound):
@@ -612,7 +612,7 @@ func hookClaimSessionEligibility(info session.Info, instanceToken string) (hookC
 // one, so the binding is reached through the ops rather than through a leg. On a
 // city that relocates nothing the route is nil and the ops value is the one this
 // function has always passed.
-func claimHookWork(cityPath, workQuery, workDir string, queryEnv []string, stores []hookStore, claimOpts hookClaimOptions, emitFailure func(command string, err error), stdout, stderr io.Writer) int {
+func claimHookWork(cityPath, workQuery, workDir string, queryEnv []string, stores, workLegs []hookStore, claimOpts hookClaimOptions, emitFailure func(command string, err error), stdout, stderr io.Writer) int {
 	// The city relocates a class and its front door could not be projected.
 	// Claiming through the work store anyway would write ownership into a
 	// ledger that does not hold the bead, which is the wrong-answer lane this
@@ -625,6 +625,7 @@ func claimHookWork(cityPath, workQuery, workDir string, queryEnv []string, store
 		return 1
 	}
 	ops := classRoutedHookClaimOps(hookClaimOps{}, route)
+	ops.WorkLegs = workLegs
 	return claimHookWorkWithRunner(workQuery, workDir, queryEnv, stores, claimOpts, ops, shellWorkQueryWithEnv, emitFailure, stdout, stderr)
 }
 
@@ -653,7 +654,50 @@ func claimHookWork(cityPath, workQuery, workDir string, queryEnv []string, store
 // relocates nothing.
 func claimHookWorkWithRunner(workQuery, workDir string, queryEnv []string, stores []hookStore, claimOpts hookClaimOptions, ops hookClaimOps, run hookStoreRunner, emitFailure func(command string, err error), stdout, stderr io.Writer) int {
 	ops.applyDefaults()
-	ops.ClassRoute.observeWorkLegs(stores)
+	normalizeHookClaimOptions(&claimOpts)
+	if marker := hookClaimNonTurnMarker(claimOpts.Env); marker != "" {
+		return writeHookClaimNonTurnDrain(marker, claimOpts, stdout, stderr)
+	}
+	if err := ops.snapshotCurrentClaim(claimOpts.Env); err != nil {
+		fmt.Fprintf(stderr, "gc hook --claim: %v\n", err) //nolint:errcheck
+		// A failed current-pointer snapshot is not an idle result. Do not query
+		// or mutate work when ownership of the session's prior claim is unknown.
+		return 1
+	}
+	if len(ops.WorkLegs) == 0 {
+		ops.WorkLegs = stores
+	}
+	ops.ClassRoute.observeWorkLegs(ops.WorkLegs)
+	current, err := resolveHookCurrentClaim(nil, claimOpts, ops, workDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc hook --claim: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	ops.CurrentClaimResolution = current
+	ops.CurrentClaimResolved = true
+	if current.live {
+		ops.setExecutionFromResidence(current.residence, workDir, claimOpts.Env)
+		executionDir, _ := ops.executionContext(workDir, claimOpts.Env)
+		if current.open {
+			readyResult := claimFirstReadyHookAssignment([]beads.Bead{current.bead}, claimOpts, ops, executionDir, stdout, stderr)
+			if readyResult.terminal {
+				return readyResult.code
+			}
+			fmt.Fprintf(stderr, "gc hook --claim: current open claim %s could not be promoted\n", current.bead.ID) //nolint:errcheck
+			return 1
+		}
+		result := hookClaimJSONResult{
+			SchemaVersion: "1",
+			OK:            true,
+			Command:       hookClaimCommandName,
+			Action:        "work",
+			Reason:        "existing_assignment",
+			BeadID:        current.bead.ID,
+			Assignee:      current.bead.Assignee,
+			Route:         hookClaimRoute(current.bead),
+		}
+		return writeHookClaimWorkResultForBead(result, current.bead, claimOpts, ops, executionDir, false, stdout, stderr)
+	}
 	// primary is the agent's own store (the first entry). It is captured once
 	// here, before the loop shrinks remaining: only the primary may surface a
 	// work-query error as a fatal claim failure. Once the primary loses its
@@ -694,9 +738,9 @@ func claimHookWorkWithRunner(workQuery, workDir string, queryEnv []string, store
 			break // selected store emptied and no later store has ready work
 		}
 		storeOpts := claimOpts
-		storeOpts.Env = queryEnv
+		storeEnv := queryEnv
 		if len(claimStore.env) > 0 {
-			storeOpts.Env = claimStore.env
+			storeEnv = claimStore.env
 		}
 		storeDir := workDir
 		if dir := strings.TrimSpace(claimStore.dir); dir != "" {
@@ -704,6 +748,9 @@ func claimHookWorkWithRunner(workQuery, workDir string, queryEnv []string, store
 		}
 		storeOps := ops
 		storeOps.Runner = func(string, string) (string, error) { return claimOutput, nil }
+		storeOps.ExecutionDir = storeDir
+		storeOps.ExecutionEnv = storeEnv
+		storeOps.ExecutionReady = true
 		res := tryHookClaim(workQuery, storeDir, &storeOpts, &storeOps, stdout, stderr)
 		if res.terminal {
 			return res.code

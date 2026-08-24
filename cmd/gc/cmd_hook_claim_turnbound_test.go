@@ -62,9 +62,12 @@ func (r *turnBoundClaimRecorder) ops(t *testing.T, output string) hookClaimOps {
 		},
 		// A run-map publish on the claim hot path would touch the filesystem; the
 		// fences under test never depend on it.
-		PublishRunMap:     func(string, string, ...string) error { return nil },
-		StampWorkMeta:     func(context.Context, string, []string, string, string, map[string]string) error { return nil },
-		ResolveWorkBranch: func(string) string { return "" },
+		PublishRunMap:       func(string, string, ...string) error { return nil },
+		StampWorkMeta:       func(context.Context, string, []string, string, string, map[string]string) error { return nil },
+		ResolveWorkBranch:   func(string) string { return "" },
+		ReadSessionClaim:    noopReadSessionClaim,
+		ReserveSessionClaim: noopReserveSessionClaim,
+		ClearSessionClaim:   noopClearSessionClaim,
 	}
 }
 
@@ -552,16 +555,11 @@ func TestHookClaimUnwindFailureIsSurfaced(t *testing.T) {
 	}
 }
 
-// TestHookClaimClearsSessionCurrentClaimOnUndeliveredUnwind pins the inverse the
-// claim back-channel was missing: when a MINTED claim stamps the session bead's
-// current_claim_bead_id and then its result cannot be delivered (F-C, EPIPE), the
-// undelivered-claim unwind must clear that stamp as well as release the work bead.
-// Without the clear a later `gc hook current --id-only` hands the shell a bead the
-// session no longer owns, and `gc bd close $BEAD_ID` closes another session's
-// in-progress work — the exact "close somebody else's bead" hazard the stamp exists
-// to prevent. The clear routes through the same StampSessionClaim seam as the stamp
-// (an empty id), and it must land BEFORE the release so a freed bead is never both
-// claimable elsewhere and still named here.
+// TestHookClaimClearsSessionCurrentClaimOnUndeliveredUnwind pins the current-claim
+// CAS compensation: when a minted claim's result cannot be delivered (F-C,
+// EPIPE), the expected-value clear must land before releasing the work bead.
+// A later winner's pointer must remain intact, and a freed bead must never be
+// both claimable elsewhere and still named by this session.
 func TestHookClaimClearsSessionCurrentClaimOnUndeliveredUnwind(t *testing.T) {
 	for _, jsonOut := range []bool{true, false} {
 		name := "json"
@@ -577,13 +575,13 @@ func TestHookClaimClearsSessionCurrentClaimOnUndeliveredUnwind(t *testing.T) {
 			ops.ReadWorkMeta = func(_ context.Context, _ string, _ []string, id, assignee string) (beads.Bead, error) {
 				return beads.Bead{ID: id, Status: "in_progress", Assignee: assignee, Metadata: map[string]string{"gc.session_id": "mc-sess1"}}, nil
 			}
-			sessSpy := &sessionClaimSpy{}
-			ops.StampSessionClaim = sessSpy.fn
+			clearSpy := &sessionClaimClearSpy{}
+			ops.ClearSessionClaim = clearSpy.fn
 			// The release override proves clear-before-release: by the time the work
-			// bead is given back, the stamp must already have been cleared.
+			// bead is given back, the expected-value clear must already have landed.
 			ops.Release = func(_ context.Context, _ string, _ []string, beadID, _ string) (bool, error) {
-				if len(sessSpy.beadIDs) != 2 || sessSpy.beadIDs[1] != "" {
-					t.Errorf("release ran before the session-claim clear; seam writes so far = %v", sessSpy.beadIDs)
+				if len(clearSpy.expected) != 1 || clearSpy.expected[0] != "work-1" {
+					t.Errorf("release ran before the session-claim clear; CAS clears so far = %v", clearSpy.expected)
 				}
 				rec.releases = append(rec.releases, beadID)
 				return true, nil
@@ -603,28 +601,21 @@ func TestHookClaimClearsSessionCurrentClaimOnUndeliveredUnwind(t *testing.T) {
 			if len(rec.releases) != 1 || rec.releases[0] != "work-1" {
 				t.Fatalf("releases = %v, want [work-1]", rec.releases)
 			}
-			// Exactly two seam writes, in order: the stamp of the minted bead, then
-			// the clear (empty id) on the unwind.
-			if len(sessSpy.beadIDs) != 2 || sessSpy.beadIDs[0] != "work-1" || sessSpy.beadIDs[1] != "" {
-				t.Fatalf("session-claim seam writes = %v, want [work-1 \"\"] (stamp then clear)", sessSpy.beadIDs)
-			}
-			if sessSpy.sessionID != "mc-sess1" {
-				t.Fatalf("session-claim seam sessionID = %q, want mc-sess1", sessSpy.sessionID)
+			if clearSpy.calls != 1 || clearSpy.sessionID != "mc-sess1" || len(clearSpy.expected) != 1 || clearSpy.expected[0] != "work-1" {
+				t.Fatalf("session-claim CAS clears = %+v, want one expected work-1 clear", clearSpy)
 			}
 		})
 	}
 }
 
-// TestHookClaimStraddleLeavesSessionClaimUntouched is the negative control for the
-// undelivered-unwind clear: the straddle path (F-B) returns BEFORE the stamp, so it
-// neither stamps nor clears the session-claim seam. The clear added for F-C must not
-// leak onto this path, where blanking the seam could drop a stamp a different,
-// still-owned bead legitimately left on the session.
+// TestHookClaimStraddleLeavesSessionClaimUntouched is the negative control for
+// the undelivered-unwind clear: the straddle path (F-B) returns before the
+// reservation, so it must not clear a pointer belonging to another claim.
 func TestHookClaimStraddleLeavesSessionClaimUntouched(t *testing.T) {
 	rec := &turnBoundClaimRecorder{}
 	ops := rec.ops(t, turnBoundRoutedWork)
-	sessSpy := &sessionClaimSpy{}
-	ops.StampSessionClaim = sessSpy.fn
+	clearSpy := &sessionClaimClearSpy{}
+	ops.ClearSessionClaim = clearSpy.fn
 	clock := time.Now()
 	ops.Now = func() time.Time { return clock }
 	ops.InvokedAt = clock
@@ -650,7 +641,7 @@ func TestHookClaimStraddleLeavesSessionClaimUntouched(t *testing.T) {
 	if len(rec.releases) != 1 || rec.releases[0] != "work-1" {
 		t.Fatalf("releases = %v, want [work-1]: a straddling claim must self-release", rec.releases)
 	}
-	if len(sessSpy.beadIDs) != 0 {
-		t.Fatalf("session-claim seam writes = %v, want none: the straddle path stamps nothing, so it must clear nothing", sessSpy.beadIDs)
+	if clearSpy.calls != 0 {
+		t.Fatalf("session-claim CAS clears = %d, want none: the straddle path returns before reservation", clearSpy.calls)
 	}
 }

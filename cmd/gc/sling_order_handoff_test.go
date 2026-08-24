@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -50,9 +51,16 @@ func TestDemandSpawnedSeatClaimsThroughItsOwnQuery(t *testing.T) {
 
 	// ga-i44k: the same seat's second cycle resolves its OWN claim rather than
 	// competing for another row.
-	second := h.runHook(t, h.workQueryServing(claimed))
+	queryCalls := 0
+	second := h.runHook(t, func() (string, error) {
+		queryCalls++
+		return h.workQueryServing(claimed)()
+	})
 	if second.Action != "work" || second.Reason != "existing_assignment" || second.BeadID != work.ID {
 		t.Fatalf("second hook result = %+v, want action=work reason=existing_assignment", second)
+	}
+	if queryCalls != 0 {
+		t.Fatalf("second cycle invoked query runner %d times, want 0 after current-pointer adoption", queryCalls)
 	}
 }
 
@@ -108,14 +116,15 @@ func TestDemandSpawnedSeatDrainsCleanlyOnAGenuineEmpty(t *testing.T) {
 }
 
 type handoffFixture struct {
-	store       beads.Store
-	cfg         *config.City
-	sessionBead beads.Bead
-	sessionName string
-	triggerID   string
-	stepStarted []string
-	drainAcked  bool
-	dir         string
+	store        beads.Store
+	cfg          *config.City
+	sessionBead  beads.Bead
+	sessionName  string
+	triggerID    string
+	stepStarted  []string
+	drainAcked   bool
+	dir          string
+	currentClaim string
 }
 
 // newHandoffFixture realizes a pool seat through the production binder, so the
@@ -239,6 +248,9 @@ func (h *handoffFixture) runHook(t *testing.T, run func() (string, error)) hookC
 
 func (h *handoffFixture) ops() hookClaimOps {
 	return hookClaimOps{
+		ReadSessionClaim:    h.readSessionClaim,
+		ReserveSessionClaim: h.reserveSessionClaim,
+		ClearSessionClaim:   h.clearSessionClaim,
 		ReadWorkMeta: func(_ context.Context, _ string, _ []string, beadID, _ string) (beads.Bead, error) {
 			return h.store.Get(beadID)
 		},
@@ -275,4 +287,36 @@ func (h *handoffFixture) ops() hookClaimOps {
 		PublishRunMap:     func(string, string, ...string) error { return nil },
 		DrainAck:          func(io.Writer) error { h.drainAcked = true; return nil },
 	}
+}
+
+func (h *handoffFixture) readSessionClaim(sessionID string) (string, error) {
+	if sessionID != h.sessionBead.ID {
+		return "", errors.New("current-claim read used the wrong session id")
+	}
+	return h.currentClaim, nil
+}
+
+func (h *handoffFixture) reserveSessionClaim(sessionID, expected, next string) (beads.MetadataCASOutcome, error) {
+	if sessionID != h.sessionBead.ID {
+		return "", errors.New("current-claim reserve used the wrong session id")
+	}
+	if strings.TrimSpace(next) == "" {
+		return "", errors.New("current-claim reserve requires a next bead")
+	}
+	if h.currentClaim != expected {
+		return beads.MetadataCASConflict, nil
+	}
+	h.currentClaim = next
+	return beads.MetadataCASSwapped, nil
+}
+
+func (h *handoffFixture) clearSessionClaim(sessionID, expected string) (beads.MetadataCASOutcome, error) {
+	if sessionID != h.sessionBead.ID {
+		return "", errors.New("current-claim clear used the wrong session id")
+	}
+	if h.currentClaim != expected {
+		return beads.MetadataCASConflict, nil
+	}
+	h.currentClaim = ""
+	return beads.MetadataCASSwapped, nil
 }

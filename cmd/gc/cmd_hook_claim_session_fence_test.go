@@ -288,14 +288,12 @@ func TestHookCommandClaimAbsentSessionBeadDrainsStale(t *testing.T) {
 	}
 }
 
-// TestHookCommandClaimFailsOpenOnSessionStoreError proves a GENUINE session-store
-// fault — here a corrupt/unreadable store file, so the fence's store open itself
-// fails — is NOT mislabeled as a stale session: the fence fails open and lets the
-// normal claim path run, which surfaces and escalates its own store errors. This
-// is the counterpart to the absent-bead case above: a confirmed-missing bead
-// drains stale, but an infrastructure fault must never refuse a possibly-healthy
-// worker.
-func TestHookCommandClaimFailsOpenOnSessionStoreError(t *testing.T) {
+// TestHookCommandClaimFailsClosedOnSessionStoreError proves a GENUINE
+// session-store fault — here a corrupt/unreadable store file — cannot enter the
+// claim path. The current-claim snapshot is part of the ownership fence, so an
+// unreadable session pointer fails closed without querying, mutating, emitting
+// output, or acknowledging a drain.
+func TestHookCommandClaimFailsClosedOnSessionStoreError(t *testing.T) {
 	clearGCEnv(t)
 	disableManagedDoltRecoveryForTest(t)
 	t.Setenv("GC_BEADS", "file")
@@ -312,23 +310,23 @@ func TestHookCommandClaimFailsOpenOnSessionStoreError(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := cmdHookWithOptions(nil, hookCommandOptions{Claim: true, JSON: true}, &stdout, &stderr)
 
-	if _, err := os.Stat(queryMarker); err != nil {
-		t.Fatalf("fail-open did not reach the work query: %v; stderr=%s", err, stderr.String())
+	if _, err := os.Stat(queryMarker); !os.IsNotExist(err) {
+		t.Fatalf("work query ran after session-store failure; stat error = %v; stderr=%s", err, stderr.String())
 	}
-	if strings.Contains(stderr.String(), "refusing stale session") {
-		t.Fatalf("store fault was mislabeled as a stale session: %s", stderr.String())
+	if stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want no claim or drain output", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "session fence unavailable") {
-		t.Fatalf("stderr = %q, want fence-unavailable diagnostic", stderr.String())
+	if strings.Contains(stderr.String(), "proceeding to claim") {
+		t.Fatalf("store fault was allowed to proceed into claim path: %s", stderr.String())
 	}
 	if code != 1 {
-		t.Fatalf("code = %d, want 1 (JSON no-work drain without --drain-ack)", code)
+		t.Fatalf("code = %d, want 1 for fail-closed session-store fault", code)
 	}
 }
 
 // TestClassifyHookClaimSessionLookupError exercises the error taxonomy that
 // decides whether a failed session lookup is a definitive identity failure
-// (stale, drain) or a transient store fault (unavailable, fail open). The two
+// (stale, drain) or a transient store fault (unavailable, fail closed). The two
 // confirmed-identity errors mirror the documented session.Store.Get contract: a
 // confirmed-absent id wraps beads.ErrNotFound, a present-but-non-session id is
 // session.ErrSessionNotFound.
@@ -352,7 +350,7 @@ func TestClassifyHookClaimSessionLookupError(t *testing.T) {
 			wantMsg: "non-session",
 		},
 		{
-			name:    "genuine store read fault fails open",
+			name:    "genuine store read fault is unavailable",
 			err:     fmt.Errorf("loading session %q: %w", "s", errors.New("dial tcp: connection refused")),
 			want:    hookClaimSessionStoreUnavailable,
 			wantMsg: "loading session bead",

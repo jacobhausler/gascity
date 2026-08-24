@@ -17,6 +17,7 @@ import (
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/dispatch"
 	"github.com/gastownhall/gascity/internal/events"
+	"github.com/gastownhall/gascity/internal/session"
 )
 
 // setHookRunExecutableForTest stubs the re-exec target of `gc hook run` to the
@@ -1666,6 +1667,37 @@ name = "worker"
 	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(cityToml), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// The claim path now snapshots and reserves the session's current pointer
+	// through the real session front door. Seed the exact session id used below
+	// so this fixture exercises that contract rather than an ambient discovery
+	// failure.
+	t.Setenv("GC_BEADS", "file")
+	cityStore, err := openCityStoreAt(cityDir)
+	if err != nil {
+		t.Fatalf("open city store: %v", err)
+	}
+	rawCityStore, _, _ := unwrapBeadPolicyStore(cityStore)
+	if caching, ok := rawCityStore.(*beads.CachingStore); ok {
+		rawCityStore = caching.Backing()
+	}
+	fileStore, ok := rawCityStore.(*beads.FileStore)
+	if !ok {
+		t.Fatalf("city store backing = %T, want file store", rawCityStore)
+	}
+	fileStore.HonorExplicitIDs = true
+	if _, err := cityStore.Create(beads.Bead{
+		ID:     "session-id-1",
+		Title:  "test session",
+		Type:   session.BeadType,
+		Labels: []string{session.LabelSession, "agent:worker-1"},
+		Metadata: map[string]string{
+			"session_name": "test-city--worker-1",
+			"template":     "worker",
+			"state":        string(session.StateActive),
+		},
+	}); err != nil {
+		t.Fatalf("seed session bead: %v", err)
+	}
 	fakeBD := filepath.Join(fakeBin, "bd")
 	script := fmt.Sprintf(`#!/bin/sh
 printf 'actor=%%s args=%%s\n' "${BEADS_ACTOR:-}" "$*" >> %q
@@ -1979,6 +2011,10 @@ mode = "on_demand"
 	fakeBin := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "bd.log")
 	script := fmt.Sprintf(`#!/bin/sh
+case "$*" in
+  *"show --json session-builder-1"*) printf '[{"id":"session-builder-1","type":"session","status":"open","labels":["gc:session"],"metadata":{"current_claim_bead_id":"ga-frpt4k"}}]'; exit 0 ;;
+  *"show --json ga-frpt4k"*) printf '[{"id":"ga-frpt4k","status":"in_progress","assignee":"builder","metadata":{"gc.routed_to":"builder"}}]'; exit 0 ;;
+esac
 printf '%%s\n' "$*" >> %q
 printf '[]'
 `, logPath)
@@ -2055,7 +2091,14 @@ mode = "on_demand"
 	}
 
 	fakeBin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(fakeBin, "bd"), []byte("#!/bin/sh\nprintf '[]'\n"), 0o755); err != nil {
+	script := `#!/bin/sh
+case "$*" in
+  *"show --json session-builder"*) printf '[{"id":"session-builder","type":"session","status":"open","labels":["gc:session"],"metadata":{"current_claim_bead_id":"ga-frpt4k"}}]'; exit 0 ;;
+  *"show --json ga-frpt4k"*) printf '[{"id":"ga-frpt4k","status":"in_progress","assignee":"builder","metadata":{"gc.routed_to":"builder"}}]'; exit 0 ;;
+esac
+printf '[]'
+`
+	if err := os.WriteFile(filepath.Join(fakeBin, "bd"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
