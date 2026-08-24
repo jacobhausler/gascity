@@ -2838,8 +2838,9 @@ func reapStaleSessionBeads(
 	return reaped
 }
 
+//nolint:unparam // CANARY-ONLY retains the count-shaped private contract so callers/tests can assert no reaping.
 func cleanupDeadRuntimeSessionCorpses(
-	store beads.Store,
+	_ beads.Store,
 	_ map[string]beads.Store,
 	_ *config.City,
 	sessionBeads *sessionBeadSnapshot,
@@ -2911,12 +2912,14 @@ func cleanupDeadRuntimeSessionCorpses(
 // former metadata-then-name Stop sequence could destroy a same-name rebind;
 // operator-directed cleanup remains the only supported action until a
 // generation-safe identity proof exists.
+//
+//nolint:unparam // CANARY-ONLY retains the count-shaped private contract so callers/tests can assert no reaping.
 func reapRuntimesBoundToClosedBeads(
-	store beads.Store,
-	sessionBeads *sessionBeadSnapshot,
-	dt *drainTracker,
-	sp runtime.Provider,
-	stderr io.Writer,
+	_ beads.Store,
+	_ *sessionBeadSnapshot,
+	_ *drainTracker,
+	_ runtime.Provider,
+	_ io.Writer,
 ) int {
 	// CANARY-ONLY TEMPORARY POSTURE: do not enumerate names, read metadata or
 	// stores, emit per-name diagnostics, or stop anything in this path. The
