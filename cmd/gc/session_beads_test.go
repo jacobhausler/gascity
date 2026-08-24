@@ -75,8 +75,7 @@ type deadRuntimeArtifactProvider struct {
 
 type quarantineCanaryProvider struct {
 	*deadRuntimeArtifactProvider
-	metaCalls   int
-	recordCalls int
+	metaCalls int
 }
 
 func (p *quarantineCanaryProvider) GetMeta(name, key string) (string, error) {
@@ -7092,8 +7091,8 @@ func TestCleanupDeadRuntimeSessionCorpsesCanaryQuarantinesConfirmedDeadRuntime(t
 	if sp.stopCalls["dead-worker"] != 0 {
 		t.Fatalf("provider Stop calls = %d, want 0", sp.stopCalls["dead-worker"])
 	}
-	if sp.metaCalls != 0 || sp.recordCalls != 0 {
-		t.Fatalf("destructive metadata/record calls = (%d, %d), want (0, 0)", sp.metaCalls, sp.recordCalls)
+	if sp.metaCalls != 0 {
+		t.Fatalf("destructive metadata calls = %d, want 0", sp.metaCalls)
 	}
 	if !sp.visible["dead-worker"] || !sp.dead["dead-worker"] {
 		t.Fatalf("canary mutated corpse state: visible=%v dead=%v", sp.visible["dead-worker"], sp.dead["dead-worker"])
@@ -7117,6 +7116,29 @@ func TestCleanupDeadRuntimeSessionCorpsesCanaryQuarantinesConfirmedDeadRuntime(t
 	}
 }
 
+func TestCleanupDeadRuntimeSessionCorpsesCanaryStartupDiagnosticOnly(t *testing.T) {
+	sp := &quarantineCanaryProvider{deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider()}
+	sp.visible["dead-worker"] = true
+	sp.dead["dead-worker"] = true
+	snapshot := newSessionBeadSnapshot([]beads.Bead{{
+		ID: "dead-session", Status: "open", Metadata: map[string]string{"session_name": "dead-worker"},
+	}})
+	var startup bytes.Buffer
+	cleanupDeadRuntimeSessionCorpses(nil, nil, nil, snapshot, nil, sp, nil, &startup)
+	if got := strings.Count(startup.String(), "CANARY-ONLY"); got != 1 {
+		t.Fatalf("startup diagnostic count = %d, want 1; stderr=%q", got, startup.String())
+	}
+	// The periodic tick passes io.Discard explicitly, so repeated ticks stay
+	// silent without package-global state or a watcher.
+	cleanupDeadRuntimeSessionCorpses(nil, nil, nil, snapshot, nil, sp, nil, io.Discard)
+	if got := strings.Count(startup.String(), "CANARY-ONLY"); got != 1 {
+		t.Fatalf("diagnostic count after periodic tick = %d, want 1; stderr=%q", got, startup.String())
+	}
+	if sp.stopCalls["dead-worker"] != 0 || sp.metaCalls != 0 {
+		t.Fatalf("repeated canary calls mutated provider: stop=%d meta=%d", sp.stopCalls["dead-worker"], sp.metaCalls)
+	}
+}
+
 func TestCleanupDeadRuntimeSessionCorpsesCanaryLeavesLiveRuntimeUntouched(t *testing.T) {
 	sp := &quarantineCanaryProvider{deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider()}
 	sp.visible["live-worker"] = true
@@ -7126,8 +7148,8 @@ func TestCleanupDeadRuntimeSessionCorpsesCanaryLeavesLiveRuntimeUntouched(t *tes
 	if got := cleanupDeadRuntimeSessionCorpses(nil, nil, nil, newSessionBeadSnapshot([]beads.Bead{sessionBead}), nil, sp, nil, &stderr); got != 0 {
 		t.Fatalf("live cleanup = %d, want 0; stderr=%q", got, stderr.String())
 	}
-	if sp.stopCalls["live-worker"] != 0 || sp.metaCalls != 0 || sp.recordCalls != 0 {
-		t.Fatalf("live path mutated provider: stop=%d meta=%d record=%d", sp.stopCalls["live-worker"], sp.metaCalls, sp.recordCalls)
+	if sp.stopCalls["live-worker"] != 0 || sp.metaCalls != 0 {
+		t.Fatalf("live path mutated provider: stop=%d meta=%d", sp.stopCalls["live-worker"], sp.metaCalls)
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("live path emitted diagnostic: %q", stderr.String())
@@ -7143,8 +7165,8 @@ func TestCleanupDeadRuntimeSessionCorpsesCanaryCheckerErrorLeavesEverythingUntou
 	if got := cleanupDeadRuntimeSessionCorpses(nil, nil, nil, newSessionBeadSnapshot([]beads.Bead{sessionBead}), nil, sp, nil, &stderr); got != 0 {
 		t.Fatalf("uncertain cleanup = %d, want 0; stderr=%q", got, stderr.String())
 	}
-	if sp.stopCalls["uncertain-worker"] != 0 || sp.metaCalls != 0 || sp.recordCalls != 0 {
-		t.Fatalf("checker-error path mutated provider: stop=%d meta=%d record=%d", sp.stopCalls["uncertain-worker"], sp.metaCalls, sp.recordCalls)
+	if sp.stopCalls["uncertain-worker"] != 0 || sp.metaCalls != 0 {
+		t.Fatalf("checker-error path mutated provider: stop=%d meta=%d", sp.stopCalls["uncertain-worker"], sp.metaCalls)
 	}
 	if !strings.Contains(stderr.String(), "confirming dead runtime session uncertain-worker") {
 		t.Fatalf("stderr = %q, want checker error diagnostic", stderr.String())
@@ -7310,7 +7332,6 @@ func TestCleanupDeadRuntimeSessionCorpsesQuarantinesWithoutStopErrors(t *testing
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["worker"] = true
 	sp.dead["worker"] = true
-	sp.stopErrs["worker"] = errors.New("stop failed")
 
 	snapshot := newSessionBeadSnapshot([]beads.Bead{{
 		ID:     "s1",
@@ -7355,11 +7376,8 @@ func TestCleanupDeadRuntimeSessionCorpsesLeavesBeadOpen(t *testing.T) {
 	sp.dead["frozen-clock-worker"] = true
 
 	snapshot := newSessionBeadSnapshot([]beads.Bead{sessionBead})
-	frozen := time.Date(2026, 5, 23, 12, 0, 0, 0, time.UTC)
-	clk := &clock.Fake{Time: frozen}
-
 	var stderr bytes.Buffer
-	got := cleanupDeadRuntimeSessionCorpses(store, nil, nil, snapshot, nil, sp, clk, &stderr)
+	got := cleanupDeadRuntimeSessionCorpses(store, nil, nil, snapshot, nil, sp, nil, &stderr)
 	if got != 0 {
 		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
@@ -7406,7 +7424,7 @@ func TestCleanupDeadRuntimeSessionCorpsesLeavesAliasClaimed(t *testing.T) {
 		t.Fatalf("cleanupDeadRuntimeSessionCorpses() = %d, want 0; stderr=%q", got, stderr.String())
 	}
 
-	// Bead must transition to closed so its alias is released.
+	// Canary posture leaves the bead open and alias claimed.
 	after, err := store.Get(bead.ID)
 	if err != nil {
 		t.Fatalf("re-fetch bead: %v", err)
@@ -7415,7 +7433,7 @@ func TestCleanupDeadRuntimeSessionCorpsesLeavesAliasClaimed(t *testing.T) {
 		t.Fatalf("bead status = %q, want open while quarantined", after.Status)
 	}
 
-	// The freed alias must now be available for a successor on the same slot.
+	// The alias remains claimed until an operator resolves the quarantine.
 	if err := session.EnsureAliasAvailable(store, "gascity-packs/codex-1", ""); err == nil {
 		t.Fatal("EnsureAliasAvailable unexpectedly succeeded while quarantined bead retains alias")
 	}
@@ -7893,14 +7911,18 @@ func TestSweepProcessTableOrphansSkipsOnTransientStoreError(t *testing.T) {
 	}
 }
 
-func TestControllerRuntimeSweepsProcessTableOrphansAfterClosedBeadReap(t *testing.T) {
+func TestControllerRuntimeSweepsProcessTableOrphansAfterClosedBeadQuarantine(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(".", "city_runtime.go"))
 	if err != nil {
 		t.Fatalf("read city_runtime.go: %v", err)
 	}
 	lines := strings.Split(string(data), "\n")
 	reapCalls := 0
+	cleanupCalls := 0
 	for i, line := range lines {
+		if strings.Contains(line, "cleanupDeadRuntimeSessionCorpses(") {
+			cleanupCalls++
+		}
 		if !strings.Contains(line, "reapRuntimesBoundToClosedBeads(") {
 			continue
 		}
@@ -7917,6 +7939,9 @@ func TestControllerRuntimeSweepsProcessTableOrphansAfterClosedBeadReap(t *testin
 	}
 	if reapCalls == 0 {
 		t.Fatal("city_runtime.go contains no reapRuntimesBoundToClosedBeads calls")
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("city_runtime.go cleanupDeadRuntimeSessionCorpses call count = %d, want exactly one startup call", cleanupCalls)
 	}
 }
 
@@ -7938,17 +7963,16 @@ func nextLineContaining(lines []string, after int, needle string) int {
 	return -1
 }
 
-// TestReapRuntimesBoundToClosedBeadsCanaryLeavesLiveRuntimeUntouched covers
-// the alias hand-off race: a live runtime is still stamped with a closed
-// bead's GC_SESSION_ID while its session_name now belongs to another bead.
-func TestReapRuntimesBoundToClosedBeadsCanaryLeavesLiveRuntimeUntouched(t *testing.T) {
-	sp := newDeadRuntimeArtifactProvider()
+// TestReapRuntimesBoundToClosedBeadsCanarySkipsWithoutReads covers the
+// alias hand-off race without inspecting names or historical metadata.
+func TestReapRuntimesBoundToClosedBeadsCanarySkipsWithoutReads(t *testing.T) {
+	sp := &quarantineCanaryProvider{deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider()}
 	sp.visible["mayor"] = true
 	if err := sp.SetMeta("mayor", "GC_SESSION_ID", "gm-closed"); err != nil {
 		t.Fatalf("SetMeta: %v", err)
 	}
 
-	store := beads.NewMemStoreFrom(0, []beads.Bead{{ID: "gm-closed", Status: "closed"}}, nil)
+	store := &sessionGetSpyStore{Store: beads.NewMemStoreFrom(0, []beads.Bead{{ID: "gm-closed", Status: "closed"}}, nil)}
 	// The session_name "mayor" is now owned by a different, open bead.
 	snapshot := newSessionBeadSnapshot([]beads.Bead{{
 		ID:     "gm-open",
@@ -7966,13 +7990,19 @@ func TestReapRuntimesBoundToClosedBeadsCanaryLeavesLiveRuntimeUntouched(t *testi
 	if len(sp.stopped) != 0 || sp.stopCalls["mayor"] != 0 {
 		t.Fatalf("stopped = %v calls=%d, want no stop", sp.stopped, sp.stopCalls["mayor"])
 	}
-	if !strings.Contains(stderr.String(), "CANARY-ONLY") || !strings.Contains(stderr.String(), "mayor") {
-		t.Fatalf("stderr = %q, want bounded CANARY-ONLY diagnostic", stderr.String())
+	if sp.metaCalls != 0 {
+		t.Fatalf("GetMeta calls = %d, want 0", sp.metaCalls)
+	}
+	if len(store.getIDs) != 0 {
+		t.Fatalf("store Get calls = %v, want 0", store.getIDs)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want no per-name diagnostic", stderr.String())
 	}
 }
 
-// TestReapRuntimesBoundToClosedBeadsSkipsOpenBeadRuntime: a healthy runtime
-// whose bead is still open must never be reaped.
+// TestReapRuntimesBoundToClosedBeadsSkipsOpenBeadRuntime preserves the
+// no-read/no-stop canary posture for a healthy runtime.
 func TestReapRuntimesBoundToClosedBeadsSkipsOpenBeadRuntime(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["worker"] = true
@@ -7996,8 +8026,8 @@ func TestReapRuntimesBoundToClosedBeadsSkipsOpenBeadRuntime(t *testing.T) {
 	}
 }
 
-// TestReapRuntimesBoundToClosedBeadsSkipsRuntimeWithoutSessionID: a runtime we
-// cannot attribute to a bead (no GC_SESSION_ID) is left untouched.
+// TestReapRuntimesBoundToClosedBeadsSkipsRuntimeWithoutSessionID preserves the
+// no-read/no-stop canary posture for an unattributed runtime.
 func TestReapRuntimesBoundToClosedBeadsSkipsRuntimeWithoutSessionID(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["mystery"] = true
@@ -8012,9 +8042,8 @@ func TestReapRuntimesBoundToClosedBeadsSkipsRuntimeWithoutSessionID(t *testing.T
 	}
 }
 
-// TestReapRuntimesBoundToClosedBeadsSkipsUnknownAndNonClosedBeads: a runtime
-// whose bead the store cannot return (e.g. another rig) or returns as not-closed
-// must not be reaped — only a confirmed-closed bead triggers a stop.
+// TestReapRuntimesBoundToClosedBeadsSkipsUnknownAndNonClosedBeads preserves
+// the no-read/no-stop canary posture regardless of historical bead state.
 func TestReapRuntimesBoundToClosedBeadsSkipsUnknownAndNonClosedBeads(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["foreign"] = true
@@ -8038,8 +8067,8 @@ func TestReapRuntimesBoundToClosedBeadsSkipsUnknownAndNonClosedBeads(t *testing.
 	}
 }
 
-// TestReapRuntimesBoundToClosedBeadsSkipsActiveDrain: teardown ordering for a
-// draining bead belongs to the drainTracker, so the reaper must defer to it.
+// TestReapRuntimesBoundToClosedBeadsSkipsActiveDrain preserves the inert
+// canary posture even when a drain tracker is present.
 func TestReapRuntimesBoundToClosedBeadsSkipsActiveDrain(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["mayor"] = true

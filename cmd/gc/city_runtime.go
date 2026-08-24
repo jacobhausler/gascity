@@ -704,6 +704,7 @@ func (cr *CityRuntime) run(ctx context.Context) {
 	// ended inside the closure via defer so it's closed out on panic,
 	// ctx cancellation, or normal completion alike.
 	startupComplete := false
+	startupDeadRuntimeDiagnosticEmitted := false
 	if !retryStartupStep("startup", func() bool { return startupComplete }, func() {
 		cr.ensureManagedDoltPublishedForTick()
 		sessionBeads := cr.loadSessionBeadSnapshot()
@@ -715,10 +716,14 @@ func (cr *CityRuntime) run(ctx context.Context) {
 			}
 		}()
 
-		cleanupDeadRuntimeSessionCorpses(cr.sessionsBeadStore().Store, cr.rigBeadStores(), cr.cfg, sessionBeads, cr.sessionDrains, cr.sp, clock.Real{}, cr.stderr)
-		// Reap live runtimes still bound to a closed bead (e.g. a named-session
-		// identity re-minted as a pool slot) so the name's current owner can
-		// rebind it and attach lands on the right runtime.
+		startupDiagnosticWriter := io.Discard
+		if !startupDeadRuntimeDiagnosticEmitted {
+			startupDiagnosticWriter = cr.stderr
+			startupDeadRuntimeDiagnosticEmitted = true
+		}
+		cleanupDeadRuntimeSessionCorpses(cr.sessionsBeadStore().Store, cr.rigBeadStores(), cr.cfg, sessionBeads, cr.sessionDrains, cr.sp, clock.Real{}, startupDiagnosticWriter)
+		// Canary-only: the closed-bead reaper is intentionally inert until a
+		// generation-safe identity proof exists.
 		reapRuntimesBoundToClosedBeads(cr.sessionsBeadStore().Store, sessionBeads, cr.sessionDrains, cr.sp, cr.stderr)
 		if swept := sweepProcessTableOrphans(cr.sp, sessionBeads, cr.sessionsBeadStore().Store, cr.cityPath, cr.stderr); swept > 0 {
 			fmt.Fprintf(cr.stderr, "session reconciler: swept %d process-table orphan runtime(s)\n", swept) //nolint:errcheck
@@ -1276,14 +1281,11 @@ func (cr *CityRuntime) tick(
 	// Post-reconcile sync was intentionally removed: the daemon's next tick
 	// corrects bead state, and the pre-reconcile sync is sufficient for
 	// the reconciler to read/write hashes during reconciliation.
-	// Reap open session beads whose tmux session is dead before loading demand
-	// so stale names cannot block desired-state computation (#742).
+	// Canary-only dead-runtime quarantine runs at startup only. Periodic ticks
+	// retain the trace phase but do not enumerate or inspect runtimes.
 	phaseStart = time.Now()
-	cleanupDeadRuntimeSessionCorpses(cr.sessionsBeadStore().Store, cr.rigBeadStores(), cr.cfg, sessionBeads, cr.sessionDrains, cr.sp, clock.Real{}, cr.stderr)
 	recordPhase(TraceSiteControllerTickPhase, "cleanup_dead_runtime_session_corpses", phaseStart, nil)
-	// Reap live runtimes still bound to a closed bead (e.g. a named-session
-	// identity re-minted as a pool slot) so the name's current owner can rebind
-	// it and attach lands on the right runtime.
+	// Canary-only: closed-bead cleanup is inert and emits no periodic diagnostic.
 	phaseStart = time.Now()
 	reapRuntimesBoundToClosedBeads(cr.sessionsBeadStore().Store, sessionBeads, cr.sessionDrains, cr.sp, cr.stderr)
 	recordPhase(TraceSiteControllerTickPhase, "reap_runtimes_bound_to_closed_beads", phaseStart, nil)
