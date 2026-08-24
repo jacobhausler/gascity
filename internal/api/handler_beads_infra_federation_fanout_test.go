@@ -8,10 +8,121 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/splittest"
 	"github.com/gastownhall/gascity/internal/config"
 )
+
+type apiMigrationRecordingStore struct {
+	beads.Store
+	idsQueries [][]string
+	queries    []beads.ListQuery
+	idsErr     error
+}
+
+func (s *apiMigrationRecordingStore) List(q beads.ListQuery) ([]beads.Bead, error) {
+	if len(q.IDs) > 0 {
+		s.idsQueries = append(s.idsQueries, append([]string(nil), q.IDs...))
+		s.queries = append(s.queries, q)
+		if s.idsErr != nil {
+			return nil, s.idsErr
+		}
+	}
+	return s.Store.List(q)
+}
+
+func TestAPIFederationSuppressesMigratedWorkShadows(t *testing.T) {
+	tests := []struct {
+		name       string
+		graphState string
+		marked     bool
+		wantTitle  string
+		wantRows   int
+	}{
+		{name: "closed stamped twin", graphState: "closed", marked: true, wantRows: 0},
+		{name: "active stamped twin", graphState: "open", marked: true, wantTitle: "graph twin", wantRows: 1},
+		{name: "active unstamped collision", graphState: "open", wantTitle: "work copy", wantRows: 1},
+		{name: "missing twin", graphState: "missing", wantTitle: "work copy", wantRows: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			workRow := beads.Bead{ID: "gcg-api-shadow", Type: "task", Status: "open", Title: "work copy"}
+			graphRows := []beads.Bead{}
+			if tt.graphState != "missing" {
+				metadata := map[string]string{}
+				if tt.marked {
+					metadata[beadmeta.InfraMigratedFromMetadataKey] = "work"
+				}
+				graphRows = append(graphRows, beads.Bead{ID: workRow.ID, Type: "task", Status: tt.graphState, Title: "graph twin", Metadata: metadata})
+			}
+			work := beads.NewMemStoreFrom(1, []beads.Bead{workRow}, nil)
+			graph := &apiMigrationRecordingStore{Store: beads.NewMemStoreFrom(len(graphRows), graphRows, nil)}
+			fs := newFakeState(t)
+			fs.cityBeadStore = work
+			fs.stores = map[string]beads.Store{fs.CityName(): work}
+			fs.graphBeadStore = graph
+
+			for _, path := range []string{"/beads/ready", "/beads"} {
+				body := getListBody(t, fs, path)
+				if len(body.Items) != tt.wantRows || body.Total != tt.wantRows {
+					t.Fatalf("%s items=%+v total=%d, want %d rows and total", path, body.Items, body.Total, tt.wantRows)
+				}
+				if tt.wantRows == 1 && body.Items[0].Title != tt.wantTitle {
+					t.Fatalf("%s winner=%q, want %q", path, body.Items[0].Title, tt.wantTitle)
+				}
+			}
+			if len(graph.idsQueries) != 2 {
+				t.Fatalf("graph migration lookup queries=%v, want one batch per API endpoint", graph.idsQueries)
+			}
+			for _, query := range graph.queries {
+				if !query.IncludeClosed || query.TierMode != beads.FederatedReadTier || len(query.IDs) != 1 {
+					t.Fatalf("graph migration query=%+v, want one explicit batched IncludeClosed/FederatedReadTier query", query)
+				}
+			}
+		})
+	}
+}
+
+func TestAPIFederationMigrationLookupFailsClosedAndBatches(t *testing.T) {
+	workRows := []beads.Bead{
+		{ID: "gcg-api-1", Type: "task", Status: "open", Title: "one"},
+		{ID: "gcg-api-2", Type: "task", Status: "open", Title: "two"},
+	}
+	work := beads.NewMemStoreFrom(len(workRows), workRows, nil)
+	graph := &apiMigrationRecordingStore{Store: beads.NewMemStore(), idsErr: errors.New("graph lookup unavailable")}
+	fs := newFakeState(t)
+	fs.cityBeadStore = work
+	fs.stores = map[string]beads.Store{fs.CityName(): work}
+	fs.graphBeadStore = graph
+	for _, path := range []string{"/beads/ready", "/beads"} {
+		rec := getRaw(t, fs, path)
+		if rec.Code != 503 {
+			t.Fatalf("%s status=%d, want 503 on graph migration lookup failure (body=%q)", path, rec.Code, rec.Body.String())
+		}
+	}
+	if len(graph.idsQueries) != 2 || len(graph.idsQueries[0]) != 2 || len(graph.idsQueries[1]) != 2 {
+		t.Fatalf("graph migration lookup queries=%v, want one batched query per endpoint", graph.idsQueries)
+	}
+	for _, query := range graph.queries {
+		if !query.IncludeClosed || query.TierMode != beads.FederatedReadTier || len(query.IDs) != 2 {
+			t.Fatalf("graph migration query=%+v, want one explicit batched IncludeClosed/FederatedReadTier query", query)
+		}
+	}
+}
+
+func TestAPIFederationSingleStoreSkipsMigrationLookup(t *testing.T) {
+	work := beads.NewMemStoreFrom(1, []beads.Bead{{ID: "gc-api-single", Type: "task", Status: "open", Title: "single"}}, nil)
+	fs := newFakeState(t)
+	fs.cityBeadStore = work
+	fs.stores = map[string]beads.Store{fs.CityName(): work}
+	for _, path := range []string{"/beads/ready", "/beads"} {
+		body := getListBody(t, fs, path)
+		if len(body.Items) != 1 || body.Items[0].Title != "single" {
+			t.Fatalf("%s items=%+v, want unchanged single-store row", path, body.Items)
+		}
+	}
+}
 
 // Fan-out properties of the split-city bead list: page bounding, cross-leg id
 // identity, and what a dead graph leg tells an operator.

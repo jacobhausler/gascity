@@ -481,20 +481,18 @@ func TestReadyEmptyResultIsAnEmptyArray(t *testing.T) {
 	}
 }
 
-// TestReadyDedupeIsFirstLegWins pins the dedupe rule against the API's, which is
-// what makes CLI == API assertable.
+// TestReadyDedupeIsFirstLegWinsForUnstampedCollision pins the legacy dedupe
+// rule against the API's for an unstamped co-resident collision, which is what
+// makes CLI == API assertable without treating it as migration evidence.
 //
-// A migrated city holds the same infrastructure row in BOTH the work store and
-// the binding: `gc storage migrate` preserves ids and never deletes the source.
-// The graph leg runs LAST and the first leg to return an id wins, so both
-// surfaces resolve that pair to the work store's row. Diverging here would make
-// the CLI and the API disagree about a bead's fields while agreeing about its
-// existence, which is worse than either answer alone.
-func TestReadyDedupeIsFirstLegWins(t *testing.T) {
+// The graph twin deliberately has no gc.infra_migrated_from marker. The graph
+// leg runs LAST and the first leg to return an id wins, so both surfaces resolve
+// this nonmigrated pair to the work store's row. Diverging here would make the
+// CLI and API disagree about a bead's fields while agreeing about existence.
+func TestReadyDedupeIsFirstLegWinsForUnstampedCollision(t *testing.T) {
 	work, graph := splittest.NewSplitStores(t)
-	// The co-resident row is what `gc storage migrate` leaves behind: it PRESERVES
-	// the id, so the copy in the binding keeps its work-era prefix, and the
-	// migration never deletes the source.
+	// This is an intentionally unstamped co-resident collision. It does not
+	// claim to model a migrated row; migration evidence is the explicit marker.
 	workCopy := mustCreateReadyBead(t, work, beads.Bead{Title: "retained work copy", Type: "task"})
 	forced, ok := graph.(beads.ForeignIDCreator)
 	if !ok {

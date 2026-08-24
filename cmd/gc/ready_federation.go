@@ -24,10 +24,13 @@ package main
 //     NOT for the graph leg — the canonical relocated binding is a
 //     beads.SQLiteStore whose ready SQL orders by (created_at, id) with no
 //     priority term. Per-leg order is deterministic, not canonical.
-//   - Dedupe: the FIRST leg to return an id wins. The graph leg runs last, so a
-//     bead co-resident in the work store and the binding — the documented steady
-//     state of a migrated city, where `gc storage migrate` preserves ids and
-//     never deletes back — resolves to the work store's row on both surfaces.
+//   - Dedupe: a work row whose graph twin is explicitly stamped
+//     gc.infra_migrated_from=work is suppressed after one batched authoritative
+//     graph lookup, allowing the graph row to win (or the id to disappear when
+//     the twin is closed). For an unstamped co-resident id, the FIRST leg to
+//     return it still wins; the graph leg runs last, so the work row remains the
+//     answer on both surfaces. This preserves legacy/nonmigrated collisions
+//     while making migration's explicit marker authoritative.
 //
 // # Where this deliberately diverges: no partial tier
 //
