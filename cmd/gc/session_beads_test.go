@@ -7,6 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -15,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -25,6 +29,7 @@ import (
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/clock"
 	"github.com/gastownhall/gascity/internal/config"
+	"github.com/gastownhall/gascity/internal/events"
 	"github.com/gastownhall/gascity/internal/extmsg"
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/runtime"
@@ -67,8 +72,9 @@ type deadRuntimeArtifactProvider struct {
 	live      map[string]bool
 	dead      map[string]bool
 	deadErrs  map[string]error
-	stopErrs  map[string]error
 	listErr   error
+	listCalls int
+	deadCalls int
 	stopped   []string
 	stopCalls map[string]int
 }
@@ -129,12 +135,12 @@ func newDeadRuntimeArtifactProvider() *deadRuntimeArtifactProvider {
 		live:      make(map[string]bool),
 		dead:      make(map[string]bool),
 		deadErrs:  make(map[string]error),
-		stopErrs:  make(map[string]error),
 		stopCalls: make(map[string]int),
 	}
 }
 
 func (p *deadRuntimeArtifactProvider) ListRunning(prefix string) ([]string, error) {
+	p.listCalls++
 	var names []string
 	for name := range p.visible {
 		if strings.HasPrefix(name, prefix) {
@@ -149,6 +155,7 @@ func (p *deadRuntimeArtifactProvider) IsRunning(name string) bool {
 }
 
 func (p *deadRuntimeArtifactProvider) IsDeadRuntimeSession(name string) (bool, error) {
+	p.deadCalls++
 	if err := p.deadErrs[name]; err != nil {
 		return false, err
 	}
@@ -157,9 +164,6 @@ func (p *deadRuntimeArtifactProvider) IsDeadRuntimeSession(name string) (bool, e
 
 func (p *deadRuntimeArtifactProvider) Stop(name string) error {
 	p.stopCalls[name]++
-	if err := p.stopErrs[name]; err != nil {
-		return err
-	}
 	p.stopped = append(p.stopped, name)
 	delete(p.visible, name)
 	delete(p.live, name)
@@ -7116,26 +7120,88 @@ func TestCleanupDeadRuntimeSessionCorpsesCanaryQuarantinesConfirmedDeadRuntime(t
 	}
 }
 
-func TestCleanupDeadRuntimeSessionCorpsesCanaryStartupDiagnosticOnly(t *testing.T) {
+// TestCityRuntimeCanaryDiagnosticUsesStartupWriterAndSkipsTick runs the real
+// CityRuntime lifecycle. It proves the startup call gets stderr exactly once,
+// while a real startup-poke tick neither enumerates nor checks the dead
+// runtime again. Calling the helper with io.Discard directly would not cover
+// either call-site contract.
+func TestCityRuntimeCanaryDiagnosticUsesStartupWriterAndSkipsTick(t *testing.T) {
+	stubManagedDoltStoreOpeners(t)
+	cityPath := t.TempDir()
+	tomlPath := filepath.Join(cityPath, "city.toml")
+	writeCityRuntimeConfig(t, tomlPath, "fake")
+	cfg, err := config.Load(osFS{}, tomlPath)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+
 	sp := &quarantineCanaryProvider{deadRuntimeArtifactProvider: newDeadRuntimeArtifactProvider()}
 	sp.visible["dead-worker"] = true
 	sp.dead["dead-worker"] = true
-	snapshot := newSessionBeadSnapshot([]beads.Bead{{
-		ID: "dead-session", Status: "open", Metadata: map[string]string{"session_name": "dead-worker"},
-	}})
-	var startup bytes.Buffer
-	cleanupDeadRuntimeSessionCorpses(nil, nil, nil, snapshot, nil, sp, nil, &startup)
-	if got := strings.Count(startup.String(), "CANARY-ONLY"); got != 1 {
-		t.Fatalf("startup diagnostic count = %d, want 1; stderr=%q", got, startup.String())
+	store := beads.NewMemStore()
+	if _, err := store.Create(beads.Bead{
+		Type:   sessionBeadType,
+		Labels: []string{sessionBeadLabel},
+		Status: "open",
+		Metadata: map[string]string{
+			"session_name": "dead-worker",
+			"state":        string(session.StateActive),
+		},
+	}); err != nil {
+		t.Fatalf("create session bead: %v", err)
 	}
-	// The periodic tick passes io.Discard explicitly, so repeated ticks stay
-	// silent without package-global state or a watcher.
-	cleanupDeadRuntimeSessionCorpses(nil, nil, nil, snapshot, nil, sp, nil, io.Discard)
-	if got := strings.Count(startup.String(), "CANARY-ONLY"); got != 1 {
-		t.Fatalf("diagnostic count after periodic tick = %d, want 1; stderr=%q", got, startup.String())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	dirty := &atomic.Bool{}
+	dirty.Store(true) // force the real startup-poke tick after startup.
+	started := false
+	var startupListCalls, startupDeadCalls int
+	var tickListCalls, tickDeadCalls int
+	var stderr bytes.Buffer
+	cr := newTestCityRuntime(t, CityRuntimeParams{
+		CityPath:    cityPath,
+		CityName:    "test-city",
+		TomlPath:    tomlPath,
+		Cfg:         cfg,
+		SP:          sp,
+		ConfigDirty: dirty,
+		BuildFn: func(*config.City, runtime.Provider, beads.Store) DesiredStateResult {
+			if started {
+				tickListCalls = sp.listCalls
+				tickDeadCalls = sp.deadCalls
+				cancel()
+			} else {
+				startupListCalls = sp.listCalls
+				startupDeadCalls = sp.deadCalls
+			}
+			return DesiredStateResult{State: map[string]TemplateParams{}}
+		},
+		Dops: newDrainOps(sp),
+		Rec:  events.Discard,
+		OnStarted: func() {
+			started = true
+		},
+		Stdout: io.Discard,
+		Stderr: &stderr,
+	})
+	cs := newControllerState(context.Background(), cfg, sp, events.NewFake(), "test-city", cityPath)
+	cs.cityBeadStore = store
+	cr.setControllerState(cs)
+
+	cr.run(ctx)
+
+	if startupDeadCalls != 1 {
+		t.Fatalf("startup dead-runtime checks = %d, want 1", startupDeadCalls)
 	}
-	if sp.stopCalls["dead-worker"] != 0 || sp.metaCalls != 0 {
-		t.Fatalf("repeated canary calls mutated provider: stop=%d meta=%d", sp.stopCalls["dead-worker"], sp.metaCalls)
+	if startupListCalls != 2 {
+		t.Fatalf("startup ListRunning calls = %d, want 2 (adoption plus canary cleanup)", startupListCalls)
+	}
+	if tickDeadCalls != startupDeadCalls || tickListCalls != startupListCalls {
+		t.Fatalf("tick touched canary inputs: startup list/dead=%d/%d tick=%d/%d", startupListCalls, startupDeadCalls, tickListCalls, tickDeadCalls)
+	}
+	if got := strings.Count(stderr.String(), "CANARY-ONLY"); got != 1 {
+		t.Fatalf("startup diagnostic count = %d, want 1; stderr=%q", got, stderr.String())
 	}
 }
 
@@ -7328,7 +7394,7 @@ func TestCleanupDeadRuntimeSessionCorpsesSkipsBlankAndDeduplicatesNames(t *testi
 	}
 }
 
-func TestCleanupDeadRuntimeSessionCorpsesQuarantinesWithoutStopErrors(t *testing.T) {
+func TestCleanupDeadRuntimeSessionCorpsesLeavesConfirmedCorpseUntouched(t *testing.T) {
 	sp := newDeadRuntimeArtifactProvider()
 	sp.visible["worker"] = true
 	sp.dead["worker"] = true
@@ -7911,37 +7977,78 @@ func TestSweepProcessTableOrphansSkipsOnTransientStoreError(t *testing.T) {
 	}
 }
 
-func TestControllerRuntimeSweepsProcessTableOrphansAfterClosedBeadQuarantine(t *testing.T) {
+func TestControllerRuntimeDeadRuntimeCleanupIsStartupOnly(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(".", "city_runtime.go"))
 	if err != nil {
 		t.Fatalf("read city_runtime.go: %v", err)
 	}
-	lines := strings.Split(string(data), "\n")
-	reapCalls := 0
-	cleanupCalls := 0
-	for i, line := range lines {
-		if strings.Contains(line, "cleanupDeadRuntimeSessionCorpses(") {
-			cleanupCalls++
-		}
-		if !strings.Contains(line, "reapRuntimesBoundToClosedBeads(") {
-			continue
-		}
-		reapCalls++
-		sweepLine := nextLineContaining(lines, i, "sweepProcessTableOrphans(")
-		staleReapLine := nextLineContaining(lines, i, "reapStaleSessionBeads(")
-		if sweepLine == -1 {
-			t.Errorf("city_runtime.go:%d closed-bead reap is not followed by process-table orphan sweep", i+1)
-			continue
-		}
-		if staleReapLine != -1 && sweepLine > staleReapLine {
-			t.Errorf("city_runtime.go:%d process-table orphan sweep runs after stale session reap; sweep line=%d stale reap line=%d", i+1, sweepLine+1, staleReapLine+1)
+	file, err := parser.ParseFile(token.NewFileSet(), "city_runtime.go", data, 0)
+	if err != nil {
+		t.Fatalf("parse city_runtime.go: %v", err)
+	}
+	funcs := make(map[string]*ast.FuncDecl)
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if ok && (fn.Name.Name == "run" || fn.Name.Name == "tick") {
+			funcs[fn.Name.Name] = fn
 		}
 	}
-	if reapCalls == 0 {
-		t.Fatal("city_runtime.go contains no reapRuntimesBoundToClosedBeads calls")
+	for _, name := range []string{"run", "tick"} {
+		if funcs[name] == nil {
+			t.Fatalf("city_runtime.go has no CityRuntime.%s function", name)
+		}
 	}
-	if cleanupCalls != 1 {
-		t.Fatalf("city_runtime.go cleanupDeadRuntimeSessionCorpses call count = %d, want exactly one startup call", cleanupCalls)
+	callNames := func(fn *ast.FuncDecl) []string {
+		var calls []string
+		ast.Inspect(fn.Body, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			ident, ok := call.Fun.(*ast.Ident)
+			if ok {
+				calls = append(calls, ident.Name)
+			}
+			return true
+		})
+		return calls
+	}
+	startupCalls := callNames(funcs["run"])
+	tickCalls := callNames(funcs["tick"])
+	count := func(calls []string, target string) int {
+		got := 0
+		for _, call := range calls {
+			if call == target {
+				got++
+			}
+		}
+		return got
+	}
+	if got := count(startupCalls, "cleanupDeadRuntimeSessionCorpses"); got != 1 {
+		t.Fatalf("CityRuntime.run cleanup call count = %d, want exactly one startup call", got)
+	}
+	if got := count(tickCalls, "cleanupDeadRuntimeSessionCorpses"); got != 0 {
+		t.Fatalf("CityRuntime.tick cleanup call count = %d, want zero periodic calls", got)
+	}
+	for name, calls := range map[string][]string{"run": startupCalls, "tick": tickCalls} {
+		for i, call := range calls {
+			if call != "reapRuntimesBoundToClosedBeads" {
+				continue
+			}
+			sweepAt := -1
+			staleAt := -1
+			for j := i + 1; j < len(calls); j++ {
+				if sweepAt == -1 && calls[j] == "sweepProcessTableOrphans" {
+					sweepAt = j
+				}
+				if staleAt == -1 && calls[j] == "reapStaleSessionBeads" {
+					staleAt = j
+				}
+			}
+			if sweepAt == -1 || (staleAt != -1 && sweepAt > staleAt) {
+				t.Errorf("CityRuntime.%s closed-bead reaper is not followed by process-table orphan sweep", name)
+			}
+		}
 	}
 }
 
@@ -7952,15 +8059,6 @@ func terminatedSessionIDs(runtimes []runtime.LiveRuntime) string {
 	}
 	sort.Strings(ids)
 	return strings.Join(ids, ",")
-}
-
-func nextLineContaining(lines []string, after int, needle string) int {
-	for i := after + 1; i < len(lines); i++ {
-		if strings.Contains(lines[i], needle) {
-			return i
-		}
-	}
-	return -1
 }
 
 // TestReapRuntimesBoundToClosedBeadsCanarySkipsWithoutReads covers the
@@ -7992,6 +8090,9 @@ func TestReapRuntimesBoundToClosedBeadsCanarySkipsWithoutReads(t *testing.T) {
 	}
 	if sp.metaCalls != 0 {
 		t.Fatalf("GetMeta calls = %d, want 0", sp.metaCalls)
+	}
+	if sp.listCalls != 0 {
+		t.Fatalf("ListRunning calls = %d, want 0", sp.listCalls)
 	}
 	if len(store.getIDs) != 0 {
 		t.Fatalf("store Get calls = %v, want 0", store.getIDs)
