@@ -113,7 +113,7 @@ gc bd update "$WORK_BEAD_ID" \
   --set-metadata gc.work_branch="$WORK_BRANCH" \
   --set-metadata gc.work_verification="<commands you ran>" \
   --status=closed \
-  --notes "Done: <brief summary of what you did>. Verification: <commands run>. Commit: ${COMMIT:-none}."
+  --append-notes "Done: <brief summary of what you did>. Verification: <commands run>. Commit: ${COMMIT:-none}."
 ```
 
 **No-op** (the bead needed no change — already satisfied / duplicate):
@@ -122,7 +122,7 @@ gc bd update "$WORK_BEAD_ID" \
   --set-metadata gc.outcome=pass \
   --set-metadata gc.work_outcome=no-op \
   --status=closed \
-  --notes "No-op: <why no change was needed>."
+  --append-notes "No-op: <why no change was needed>."
 ```
 For `blocked` / `abandoned`, use that value for `gc.work_outcome` and also mail
 Witness.
@@ -134,7 +134,7 @@ prevents `mol-do-work` wrapper beads from remaining ready after the real work
 is complete.
 ```bash
 if [ -n "${GC_BEAD_ID:-}" ] && [ "$GC_BEAD_ID" != "$WORK_BEAD_ID" ]; then
-  gc bd update "$GC_BEAD_ID" --set-metadata gc.outcome=pass --status=closed --notes "Target $WORK_BEAD_ID completed. Commit: ${COMMIT:-none}."
+  gc bd update "$GC_BEAD_ID" --set-metadata gc.outcome=pass --status=closed --append-notes "Target $WORK_BEAD_ID completed. Commit: ${COMMIT:-none}."
 fi
 ```
 
@@ -156,9 +156,74 @@ Work is done. Close this drain step, then signal the controller to reclaim this
 session:
 
 ```bash
-DRAIN_BEAD_ID="${GC_BEAD_ID:-${GC_TRIGGER_BEAD_ID:-}}"
-if [ -n "$DRAIN_BEAD_ID" ]; then
-  gc bd update "$DRAIN_BEAD_ID" --set-metadata gc.outcome=pass --status=closed --notes "Drain acknowledged."
+RUNTIME_ACTOR="${BEADS_ACTOR:-}"
+if [ -z "$RUNTIME_ACTOR" ]; then
+  echo "mol-do-work drain requires a runtime actor to verify bead ownership" >&2
+  exit 1
+fi
+CURRENT_BEAD_ID="$(gc hook current --id-only 2>/dev/null || true)"
+STARTUP_BEAD_ID="${CURRENT_BEAD_ID:-${GC_BEAD_ID:-${GC_TRIGGER_BEAD_ID:-}}}"
+if [ -z "$STARTUP_BEAD_ID" ]; then
+  echo "mol-do-work drain requires a current or startup bead id to resolve its workflow root" >&2
+  exit 1
+fi
+
+if ! STARTUP_BEAD=$(gc bd show "$STARTUP_BEAD_ID" --json); then
+  echo "mol-do-work drain could not read seed bead $STARTUP_BEAD_ID" >&2
+  exit 1
+fi
+STARTUP_PAYLOAD_ID=$(printf '%s' "$STARTUP_BEAD" | jq -r '(if type == "array" then .[0] else . end) | .id // empty')
+if [ "$STARTUP_PAYLOAD_ID" != "$STARTUP_BEAD_ID" ]; then
+  echo "mol-do-work drain rejected a seed payload with the wrong bead id" >&2
+  exit 1
+fi
+ROOT_BEAD_ID=$(printf '%s' "$STARTUP_BEAD" | jq -r '(if type == "array" then .[0] else . end) | .metadata["gc.root_bead_id"] // empty')
+STARTUP_STEP_REF=$(printf '%s' "$STARTUP_BEAD" | jq -r '(if type == "array" then .[0] else . end) | .metadata["gc.step_ref"] // empty')
+STARTUP_STATUS=$(printf '%s' "$STARTUP_BEAD" | jq -r '(if type == "array" then .[0] else . end) | .status // empty')
+STARTUP_ASSIGNEE=$(printf '%s' "$STARTUP_BEAD" | jq -r '(if type == "array" then .[0] else . end) | .assignee // empty')
+if [ -z "$ROOT_BEAD_ID" ]; then
+  echo "mol-do-work drain could not resolve its workflow root from $STARTUP_BEAD_ID" >&2
+  exit 1
+fi
+if [ -z "$STARTUP_ASSIGNEE" ] || [ "$STARTUP_ASSIGNEE" != "$RUNTIME_ACTOR" ]; then
+  echo "mol-do-work drain rejected a seed bead owned by a different runtime actor" >&2
+  exit 1
+fi
+
+if [ "$STARTUP_STEP_REF" = "mol-do-work.drain" ] && [ "$STARTUP_STATUS" = "in_progress" ] && [ "$STARTUP_ASSIGNEE" = "$RUNTIME_ACTOR" ] && [ -n "$ROOT_BEAD_ID" ]; then
+  DRAIN_BEAD_ID="$STARTUP_BEAD_ID"
+else
+  READY_BEADS=$(gc ready --json --limit=2 --metadata-field "gc.root_bead_id=$ROOT_BEAD_ID" --metadata-field "gc.step_ref=mol-do-work.drain") || {
+    echo "mol-do-work drain could not read ready continuations for root $ROOT_BEAD_ID" >&2
+    exit 1
+  }
+  if ! printf '%s' "$READY_BEADS" | jq -e 'type == "array" and length == 1' >/dev/null; then
+    echo "mol-do-work drain could not resolve one ready continuation bead for root $ROOT_BEAD_ID" >&2
+    exit 1
+  fi
+  CANDIDATE_ID=$(printf '%s' "$READY_BEADS" | jq -r '.[0].id // empty')
+  CANDIDATE_ROOT=$(printf '%s' "$READY_BEADS" | jq -r '.[0].metadata["gc.root_bead_id"] // empty')
+  CANDIDATE_STEP=$(printf '%s' "$READY_BEADS" | jq -r '.[0].metadata["gc.step_ref"] // empty')
+  CANDIDATE_STATUS=$(printf '%s' "$READY_BEADS" | jq -r '.[0].status // empty')
+  CANDIDATE_ASSIGNEE=$(printf '%s' "$READY_BEADS" | jq -r '.[0].assignee // empty')
+  if [ -z "$CANDIDATE_ID" ] || [ "$CANDIDATE_ROOT" != "$ROOT_BEAD_ID" ] || [ "$CANDIDATE_STEP" != "mol-do-work.drain" ] || [ "$CANDIDATE_STATUS" != "open" ] || { [ -n "$CANDIDATE_ASSIGNEE" ] && [ "$CANDIDATE_ASSIGNEE" != "$RUNTIME_ACTOR" ]; }; then
+    echo "mol-do-work drain rejected a ready continuation with the wrong identity for root $ROOT_BEAD_ID" >&2
+    exit 1
+  fi
+  DRAIN_BEAD_ID="$CANDIDATE_ID"
+fi
+
+if [ -z "$DRAIN_BEAD_ID" ]; then
+  echo "mol-do-work drain could not resolve a drain bead; refusing to acknowledge drain" >&2
+  exit 1
+fi
+if ! gc bd update "$DRAIN_BEAD_ID" --claim; then
+  echo "mol-do-work drain could not claim $DRAIN_BEAD_ID; refusing to acknowledge drain" >&2
+  exit 1
+fi
+if ! gc bd update "$DRAIN_BEAD_ID" --set-metadata gc.outcome=pass --status=closed --append-notes "Drain acknowledged."; then
+  echo "mol-do-work drain could not close $DRAIN_BEAD_ID; refusing to acknowledge drain" >&2
+  exit 1
 fi
 gc runtime drain-ack
 ```

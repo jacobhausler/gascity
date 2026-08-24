@@ -1,7 +1,11 @@
 package core
 
 import (
+	"fmt"
 	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -129,6 +133,544 @@ func TestMolDoWorkClaimsSourceBeforeFirstHeartbeat(t *testing.T) {
 		if strings.Contains(lower, unsafe) {
 			t.Errorf("do-work must not describe source claiming as unconditionally safe; found %q", unsafe)
 		}
+	}
+}
+
+// TestMolDoWorkDrainResolvesCurrentContinuation pins the drain handoff
+// contract. Pool shells do not receive the dispatch-only bead-id variables, so
+// the drain seeds resolution from gc hook current and falls back to those vars
+// only for direct/legacy lanes. A stale current bead is not closed: its root
+// selects the unique ready mol-do-work.drain continuation. Every ambiguity,
+// identity mismatch, read failure, or close failure stops before drain-ack.
+func TestMolDoWorkDrainResolvesCurrentContinuation(t *testing.T) {
+	step := formulaStep(t, readFormula(t, "mol-do-work.toml"), "drain")
+
+	actor := `RUNTIME_ACTOR="${BEADS_ACTOR:-}"`
+	actorAt := strings.Index(step, actor)
+	if actorAt < 0 {
+		t.Fatalf("drain must derive its runtime actor from BEADS_ACTOR: missing %q", actor)
+	}
+	if !strings.Contains(step[actorAt:], `if [ -z "$RUNTIME_ACTOR" ]; then`) {
+		t.Fatal("drain must fail closed when BEADS_ACTOR is missing")
+	}
+	currentID := `CURRENT_BEAD_ID="$(gc hook current --id-only 2>/dev/null || true)"`
+	currentIDAt := strings.Index(step, currentID)
+	if currentIDAt < 0 {
+		t.Fatalf("drain must seed resolution from gc hook current: missing %q", currentID)
+	}
+	seedID := `STARTUP_BEAD_ID="${CURRENT_BEAD_ID:-${GC_BEAD_ID:-${GC_TRIGGER_BEAD_ID:-}}}"`
+	seedIDAt := strings.Index(step, seedID)
+	if seedIDAt < 0 || seedIDAt < currentIDAt {
+		t.Fatalf("drain must use current claim before dispatch-env fallback: missing or misplaced %q", seedID)
+	}
+
+	if strings.Contains(step, `DRAIN_BEAD_ID="${GC_BEAD_ID`) {
+		t.Fatal("drain must not close the immutable startup env bead directly")
+	}
+	if !strings.Contains(step, `gc bd show "$STARTUP_BEAD_ID" --json`) {
+		t.Fatal("drain must read the seed bead before selecting a continuation")
+	}
+	if !strings.Contains(step, `STARTUP_PAYLOAD_ID=$(printf '%s' "$STARTUP_BEAD" | jq -r`) ||
+		!strings.Contains(step, `if [ "$STARTUP_PAYLOAD_ID" != "$STARTUP_BEAD_ID" ]; then`) {
+		t.Fatal("drain must revalidate that the seed payload is the requested bead")
+	}
+	if !strings.Contains(step, `.metadata["gc.root_bead_id"] // empty`) ||
+		!strings.Contains(step, `.metadata["gc.step_ref"] // empty`) {
+		t.Fatal("drain must derive both workflow root and step ref from the seed bead")
+	}
+
+	// Fresh current-drain claims may close directly, but only while the seed is
+	// visibly live and exactly the drain step for the resolved root.
+	direct := `if [ "$STARTUP_STEP_REF" = "mol-do-work.drain" ] && [ "$STARTUP_STATUS" = "in_progress" ] && [ "$STARTUP_ASSIGNEE" = "$RUNTIME_ACTOR" ] && [ -n "$ROOT_BEAD_ID" ]; then`
+	if !strings.Contains(step, direct) {
+		t.Fatalf("fresh current-drain path must require exact step, live status, assignee, and root: missing %q", direct)
+	}
+	if !strings.Contains(step, `[ -z "$STARTUP_ASSIGNEE" ] || [ "$STARTUP_ASSIGNEE" != "$RUNTIME_ACTOR" ]`) {
+		t.Fatal("drain must reject a seed bead with missing or foreign ownership")
+	}
+
+	// A stale do-work seed must resolve through the federated reader so split
+	// graph stores are covered; the old `gc bd ready` path is store-blind.
+	ready := `gc ready --json --limit=2 --metadata-field "gc.root_bead_id=$ROOT_BEAD_ID" --metadata-field "gc.step_ref=mol-do-work.drain"`
+	if !strings.Contains(step, ready) {
+		t.Fatalf("stale seeds must use the federated continuation reader: missing %q", ready)
+	}
+	if strings.Contains(step, "gc bd ready") {
+		t.Fatal("drain must never use split-store-blind `gc bd ready`; use federated `gc ready`")
+	}
+	if !strings.Contains(step, "length == 1") {
+		t.Fatal("drain must require exactly one ready continuation, rejecting zero and ambiguous candidates")
+	}
+	for _, field := range []string{"CANDIDATE_ID", "CANDIDATE_ROOT", "CANDIDATE_STEP", "CANDIDATE_STATUS", "CANDIDATE_ASSIGNEE"} {
+		if !strings.Contains(step, field) {
+			t.Fatalf("drain must revalidate candidate %s before closing", field)
+		}
+	}
+	if !strings.Contains(step, `CANDIDATE_ROOT" != "$ROOT_BEAD_ID"`) ||
+		!strings.Contains(step, `CANDIDATE_STEP" != "mol-do-work.drain"`) ||
+		!strings.Contains(step, `CANDIDATE_STATUS" != "open"`) ||
+		!strings.Contains(step, `[ -n "$CANDIDATE_ASSIGNEE" ] && [ "$CANDIDATE_ASSIGNEE" != "$RUNTIME_ACTOR" ]`) {
+		t.Fatal("drain must reject a candidate whose root, step, status, or foreign assignee is not the expected continuation")
+	}
+
+	emptyGuard := `if [ -z "$STARTUP_BEAD_ID" ]; then`
+	emptyGuardAt := strings.Index(step, emptyGuard)
+	if emptyGuardAt < 0 {
+		t.Fatalf("drain must fail closed when no current or fallback seed id is available: missing %q", emptyGuard)
+	}
+
+	claimCommand := `gc bd update "$DRAIN_BEAD_ID" --claim`
+	claimAt := strings.Index(step, claimCommand)
+	if claimAt < 0 {
+		t.Fatalf("drain must claim the resolved step before closing it: missing %q", claimCommand)
+	}
+	closeCommand := `gc bd update "$DRAIN_BEAD_ID" --set-metadata gc.outcome=pass --status=closed --append-notes "Drain acknowledged."`
+	closeAt := strings.Index(step, closeCommand)
+	if closeAt < 0 {
+		t.Fatalf("drain must close the exact resolved step id: missing %q", closeCommand)
+	}
+	for _, unsupported := range []string{"--if-status", "--if-assignee"} {
+		if strings.Contains(step, unsupported) {
+			t.Fatalf("drain close must not use unsupported routed update flag %q", unsupported)
+		}
+	}
+	ack := "gc runtime drain-ack"
+	ackAt := strings.Index(step, ack)
+	if ackAt < 0 {
+		t.Fatalf("drain must acknowledge the runtime after closing its step: missing %q", ack)
+	}
+	if closeAt > ackAt {
+		t.Fatalf("drain acknowledges runtime before closing its step (close at %d, ack at %d)", closeAt, ackAt)
+	}
+	if claimAt > closeAt {
+		t.Fatalf("drain closes its step before claiming it (claim at %d, close at %d)", claimAt, closeAt)
+	}
+	claimGuard := "if ! " + claimCommand + "; then"
+	claimGuardAt := strings.Index(step, claimGuard)
+	if claimGuardAt < 0 {
+		t.Fatalf("drain must fail closed when claiming the resolved step fails: missing %q", claimGuard)
+	}
+	if claimGuardAt > closeAt {
+		t.Fatalf("drain closes its step before entering the claim failure guard (guard at %d, close at %d)", claimGuardAt, closeAt)
+	}
+	claimGuardBody := step[claimGuardAt:closeAt]
+	if !strings.Contains(claimGuardBody, "exit 1") {
+		t.Fatalf("drain claim failure must exit before close; guard is %q", claimGuardBody)
+	}
+
+	// The empty-id guard must terminate before the close attempt, so a failed
+	// current-claim lookup cannot be converted into a successful drain-ack.
+	emptyGuardBody := step[emptyGuardAt:closeAt]
+	if !strings.Contains(emptyGuardBody, "exit 1") {
+		t.Fatalf("drain must exit from the no-id guard before attempting close; guard is %q", emptyGuardBody)
+	}
+
+	closeGuard := "if ! " + closeCommand + "; then"
+	closeGuardAt := strings.Index(step, closeGuard)
+	if closeGuardAt < 0 {
+		t.Fatalf("drain must fail closed when closing the exact step fails: missing %q", closeGuard)
+	}
+	if closeGuardAt > ackAt {
+		t.Fatalf("drain acknowledges runtime before entering the close failure guard (guard at %d, ack at %d)", closeGuardAt, ackAt)
+	}
+	closeGuardBody := step[closeGuardAt:ackAt]
+	if !strings.Contains(closeGuardBody, "exit 1") {
+		t.Fatalf("drain close failure must exit before drain-ack; guard is %q", closeGuardBody)
+	}
+}
+
+func TestMolDoWorkUsesAppendNotes(t *testing.T) {
+	formula := readFormula(t, "mol-do-work.toml")
+	for _, step := range formula.Steps {
+		if strings.Contains(strings.ReplaceAll(step.Description, "--append-notes", ""), "--notes") {
+			t.Fatalf("mol-do-work step %q must not use destructive --notes; use --append-notes", step.ID)
+		}
+	}
+}
+
+const fakeDrainGC = `#!/bin/sh
+set -eu
+if [ "${1:-}" = "hook" ] && [ "${2:-}" = "current" ]; then
+  if [ "${FAKE_CURRENT_RC:-0}" != "0" ]; then exit 1; fi
+  printf '%s\n' "${FAKE_CURRENT_ID:-}"
+  exit 0
+fi
+if [ "${1:-}" = "bd" ] && [ "${2:-}" = "show" ]; then
+  if [ "${FAKE_SHOW_RC:-0}" != "0" ]; then exit 1; fi
+  printf '%s\n' "${FAKE_SEED_JSON:-[]}"
+  exit 0
+fi
+if [ "${1:-}" = "ready" ]; then
+  printf '%s\n' "ready" >> "$FAKE_LOG"
+  if [ "${FAKE_READY_RC:-0}" != "0" ]; then exit 1; fi
+  printf '%s\n' "${FAKE_READY_JSON:-[]}"
+  exit 0
+fi
+if [ "${1:-}" = "bd" ] && [ "${2:-}" = "update" ]; then
+	if [ "${4:-}" = "--claim" ]; then
+		printf 'claim-attempt:%s\n' "${3:-}" >> "$FAKE_LOG"
+		if [ "${FAKE_CLAIM_RC:-0}" != "0" ]; then exit 1; fi
+		printf 'claim:%s\n' "${3:-}" >> "$FAKE_LOG"
+		exit 0
+	fi
+	printf 'attempt:%s\n' "${3:-}" >> "$FAKE_LOG"
+	if [ "${FAKE_UPDATE_RC:-0}" != "0" ]; then exit 1; fi
+	printf 'update:%s\n' "${3:-}" >> "$FAKE_LOG"
+	exit 0
+fi
+if [ "${1:-}" = "runtime" ] && [ "${2:-}" = "drain-ack" ]; then
+  printf '%s\n' "ack" >> "$FAKE_LOG"
+  exit 0
+fi
+exit 64
+`
+
+type drainHarnessCase struct {
+	name          string
+	actor         string
+	missingActor  bool
+	currentID     string
+	currentFailed bool
+	showFailed    bool
+	claimFailed   bool
+	readyFailed   bool
+	updateFailed  bool
+	seedJSON      string
+	readyJSON     string
+	env           map[string]string
+	wantSuccess   bool
+	wantID        string
+	wantReady     bool
+}
+
+func drainHarnessBead(id, step, assignee string) string {
+	return "[" + drainHarnessBeadObject(id, "root-1", step, "in_progress", assignee) + "]"
+}
+
+func drainHarnessBeadObject(id, root, step, status, assignee string) string {
+	return fmt.Sprintf(`{
+  "id": %q,
+  "status": %q,
+  "assignee": %q,
+  "metadata": {"gc.root_bead_id": %q, "gc.step_ref": %q}
+}`, id, status, assignee, root, step)
+}
+
+func drainHarnessEnv(overrides map[string]string, jqPath string) []string {
+	skip := map[string]bool{
+		"BEADS_ACTOR":        true,
+		"GC_BEAD_ID":         true,
+		"GC_TRIGGER_BEAD_ID": true,
+		"FAKE_CURRENT_ID":    true,
+		"FAKE_CURRENT_RC":    true,
+		"FAKE_CLAIM_RC":      true,
+		"FAKE_LOG":           true,
+		"FAKE_READY_JSON":    true,
+		"FAKE_READY_RC":      true,
+		"FAKE_SEED_JSON":     true,
+		"FAKE_SHOW_RC":       true,
+		"FAKE_UPDATE_RC":     true,
+		"PATH":               true,
+	}
+	env := make([]string, 0, len(os.Environ())+len(overrides)+1)
+	for _, item := range os.Environ() {
+		key, _, ok := strings.Cut(item, "=")
+		if !ok || skip[key] {
+			continue
+		}
+		env = append(env, item)
+	}
+	for key, value := range overrides {
+		env = append(env, key+"="+value)
+	}
+	path := overrides["PATH"]
+	if path == "" {
+		path = filepath.Dir(jqPath)
+	}
+	env = append(env, "PATH="+path)
+	return env
+}
+
+func runDrainHarness(t *testing.T, script string, tc drainHarnessCase) (string, string, error) {
+	t.Helper()
+	jqPath, err := exec.LookPath("jq")
+	if err != nil {
+		t.Fatalf("jq is required to execute the formula drain contract: %v", err)
+	}
+	dir := t.TempDir()
+	gcPath := filepath.Join(dir, "gc")
+	if err := os.WriteFile(gcPath, []byte(fakeDrainGC), 0o755); err != nil {
+		t.Fatalf("write fake gc: %v", err)
+	}
+	logPath := filepath.Join(dir, "calls.log")
+	env := map[string]string{
+		"BEADS_ACTOR":     tc.actor,
+		"FAKE_CURRENT_ID": tc.currentID,
+		"FAKE_CURRENT_RC": "0",
+		"FAKE_CLAIM_RC":   "0",
+		"FAKE_LOG":        logPath,
+		"FAKE_READY_JSON": tc.readyJSON,
+		"FAKE_READY_RC":   "0",
+		"FAKE_SEED_JSON":  tc.seedJSON,
+		"FAKE_SHOW_RC":    "0",
+		"FAKE_UPDATE_RC":  "0",
+	}
+	if tc.currentFailed {
+		env["FAKE_CURRENT_RC"] = "1"
+	}
+	if tc.claimFailed {
+		env["FAKE_CLAIM_RC"] = "1"
+	}
+	if tc.actor == "" && !tc.missingActor {
+		env["BEADS_ACTOR"] = "worker"
+	}
+	if tc.missingActor {
+		delete(env, "BEADS_ACTOR")
+	}
+	if tc.showFailed {
+		env["FAKE_SHOW_RC"] = "1"
+	}
+	if tc.readyFailed {
+		env["FAKE_READY_RC"] = "1"
+	}
+	if tc.updateFailed {
+		env["FAKE_UPDATE_RC"] = "1"
+	}
+	for key, value := range tc.env {
+		env[key] = value
+	}
+	// Put the fake gc first and retain the real jq directory. The formula's
+	// shell is otherwise run with only scenario-controlled bead-store behavior.
+	path := dir + string(os.PathListSeparator) + filepath.Dir(jqPath)
+	env["PATH"] = path
+	cmd := exec.Command("sh", "-c", script)
+	cmd.Env = drainHarnessEnv(env, jqPath)
+	out, runErr := cmd.CombinedOutput()
+	logBytes, readErr := os.ReadFile(logPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read fake gc log: %v", readErr)
+	}
+	return string(out), string(logBytes), runErr
+}
+
+// TestMolDoWorkDrainShellScenarios executes the embedded drain instructions
+// against a hermetic fake gc. This covers the live current-claim path, stale
+// same-session continuation, env fallback, zero/ambiguous/wrong candidates,
+// reader failures, and close failures; every failure must omit drain-ack.
+func TestMolDoWorkDrainShellScenarios(t *testing.T) {
+	step := formulaStep(t, readFormula(t, "mol-do-work.toml"), "drain")
+	start := strings.Index(step, "```bash\n")
+	if start < 0 {
+		t.Fatal("drain is missing its bash command block")
+	}
+	bodyStart := start + len("```bash\n")
+	bodyEndRel := strings.Index(step[bodyStart:], "\n```")
+	if bodyEndRel < 0 {
+		t.Fatal("drain bash command block is unterminated")
+	}
+	script := step[bodyStart : bodyStart+bodyEndRel]
+
+	seedDrain := drainHarnessBead("drain-current", "mol-do-work.drain", "worker")
+	seedDrainForeign := drainHarnessBead("drain-current", "mol-do-work.drain", "other-worker")
+	seedWork := drainHarnessBead("work-old", "mol-do-work.do-work", "worker")
+	seedWorkForeign := drainHarnessBead("work-old", "mol-do-work.do-work", "other-worker")
+	readyDrain := drainHarnessBeadObject("drain-next", "root-1", "mol-do-work.drain", "open", "")
+	readyDrainOwned := drainHarnessBeadObject("drain-next", "root-1", "mol-do-work.drain", "open", "worker")
+	wrongRoot := drainHarnessBeadObject("drain-wrong-root", "root-2", "mol-do-work.drain", "open", "")
+	wrongStep := drainHarnessBeadObject("drain-wrong-step", "root-1", "mol-do-work.do-work", "open", "")
+	wrongStatus := drainHarnessBeadObject("drain-wrong-status", "root-1", "mol-do-work.drain", "in_progress", "")
+	foreignAssignee := drainHarnessBeadObject("drain-foreign", "root-1", "mol-do-work.drain", "open", "other-worker")
+	for _, tc := range []drainHarnessCase{
+		{
+			name:        "fresh current drain",
+			currentID:   "drain-current",
+			seedJSON:    seedDrain,
+			readyJSON:   `[]`,
+			wantSuccess: true,
+			wantID:      "drain-current",
+		},
+		{
+			name:         "missing actor",
+			missingActor: true,
+			currentID:    "drain-current",
+			seedJSON:     seedDrain,
+			readyJSON:    `[]`,
+		},
+		{
+			name:        "claim failure",
+			currentID:   "drain-current",
+			claimFailed: true,
+			seedJSON:    seedDrain,
+			readyJSON:   `[]`,
+		},
+		{
+			name:      "current direct foreign seed",
+			currentID: "drain-current",
+			seedJSON:  seedDrainForeign,
+			readyJSON: `[]`,
+		},
+		{
+			name:          "env fallback foreign seed",
+			currentFailed: true,
+			seedJSON:      seedDrainForeign,
+			readyJSON:     `[]`,
+			env:           map[string]string{"GC_BEAD_ID": "drain-current"},
+		},
+		{
+			name:      "stale foreign seed",
+			currentID: "work-old",
+			seedJSON:  seedWorkForeign,
+			readyJSON: `[]`,
+		},
+		{
+			name:        "stale current selects unassigned continuation before stale env",
+			currentID:   "work-old",
+			seedJSON:    seedWork,
+			readyJSON:   "[" + readyDrain + "]",
+			env:         map[string]string{"GC_BEAD_ID": "stale-env-drain"},
+			wantSuccess: true,
+			wantID:      "drain-next",
+			wantReady:   true,
+		},
+		{
+			name:        "stale current selects seed-owned continuation",
+			currentID:   "work-old",
+			seedJSON:    seedWork,
+			readyJSON:   "[" + readyDrainOwned + "]",
+			wantSuccess: true,
+			wantID:      "drain-next",
+			wantReady:   true,
+		},
+		{
+			name:          "env fallback direct drain",
+			currentFailed: true,
+			seedJSON:      seedDrain,
+			readyJSON:     `[]`,
+			env:           map[string]string{"GC_TRIGGER_BEAD_ID": "drain-current"},
+			wantSuccess:   true,
+			wantID:        "drain-current",
+		},
+		{
+			name:          "no seed id",
+			currentFailed: true,
+			readyJSON:     `[]`,
+		},
+		{
+			name:      "zero continuations",
+			currentID: "work-old",
+			seedJSON:  seedWork,
+			readyJSON: `[]`,
+			wantReady: true,
+		},
+		{
+			name:      "ambiguous continuations",
+			currentID: "work-old",
+			seedJSON:  seedWork,
+			readyJSON: "[" + readyDrain + "," + readyDrainOwned + "]",
+			wantReady: true,
+		},
+		{
+			name:      "wrong root",
+			currentID: "work-old",
+			seedJSON:  seedWork,
+			readyJSON: "[" + wrongRoot + "]",
+			wantReady: true,
+		},
+		{
+			name:      "wrong step",
+			currentID: "work-old",
+			seedJSON:  seedWork,
+			readyJSON: "[" + wrongStep + "]",
+			wantReady: true,
+		},
+		{
+			name:      "wrong status",
+			currentID: "work-old",
+			seedJSON:  seedWork,
+			readyJSON: "[" + wrongStatus + "]",
+			wantReady: true,
+		},
+		{
+			name:      "foreign assignee",
+			currentID: "work-old",
+			seedJSON:  seedWork,
+			readyJSON: "[" + foreignAssignee + "]",
+			wantReady: true,
+		},
+		{
+			name:       "seed read failure",
+			currentID:  "drain-current",
+			showFailed: true,
+			seedJSON:   seedDrain,
+			readyJSON:  `[]`,
+		},
+		{
+			name:      "wrong seed id",
+			currentID: "drain-current",
+			seedJSON:  drainHarnessBead("different-seed", "mol-do-work.drain", "worker"),
+			readyJSON: `[]`,
+		},
+		{
+			name:        "ready read failure",
+			currentID:   "work-old",
+			seedJSON:    seedWork,
+			readyFailed: true,
+			readyJSON:   `[]`,
+			wantReady:   true,
+		},
+		{
+			name:         "close failure",
+			currentID:    "drain-current",
+			seedJSON:     seedDrain,
+			updateFailed: true,
+			readyJSON:    `[]`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, log, err := runDrainHarness(t, script, tc)
+			if tc.wantSuccess && err != nil {
+				t.Fatalf("drain failed: %v\noutput: %s\nlog: %s", err, out, log)
+			}
+			if !tc.wantSuccess && err == nil {
+				t.Fatalf("drain succeeded on a fail-closed scenario\noutput: %s\nlog: %s", out, log)
+			}
+			if tc.wantID != "" && !strings.Contains(log, "update:"+tc.wantID+"\n") {
+				t.Fatalf("close log = %q, want update of exact bead %q", log, tc.wantID)
+			}
+			if tc.wantReady && !strings.Contains(log, "ready\n") {
+				t.Fatalf("close log = %q, want federated ready lookup", log)
+			}
+			if !tc.wantReady && strings.Contains(log, "ready\n") {
+				t.Fatalf("close log = %q, did not expect ready lookup", log)
+			}
+			if tc.wantSuccess {
+				if !strings.Contains(log, "claim:"+tc.wantID+"\n") {
+					t.Fatalf("close log = %q, want claim of exact bead %q", log, tc.wantID)
+				}
+				if !strings.Contains(log, "ack\n") {
+					t.Fatalf("close log = %q, want drain-ack after close", log)
+				}
+				if strings.Index(log, "claim:") > strings.Index(log, "update:") {
+					t.Fatalf("close log = %q, close preceded claim", log)
+				}
+				if strings.Index(log, "update:") > strings.Index(log, "ack\n") {
+					t.Fatalf("close log = %q, drain-ack preceded close", log)
+				}
+			} else {
+				if tc.claimFailed && !strings.Contains(log, "claim-attempt:") {
+					t.Fatalf("close log = %q, claim failure case did not attempt claim", log)
+				}
+				if tc.claimFailed && strings.Contains(log, "claim:") {
+					t.Fatalf("close log = %q, claim failure unexpectedly succeeded", log)
+				}
+				if strings.Contains(log, "update:") {
+					t.Fatalf("close log = %q, failure path must not close a bead", log)
+				}
+				if strings.Contains(log, "ack\n") {
+					t.Fatalf("close log = %q, failure path must not drain-ack", log)
+				}
+			}
+		})
 	}
 }
 
