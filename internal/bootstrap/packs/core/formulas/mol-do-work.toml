@@ -44,11 +44,24 @@ gc bd show "$WORK_BEAD_ID"
 
 Read the bead's title and description carefully. This is your task.
 
-**Signal liveness:** run `gc bd heartbeat "$WORK_BEAD_ID"` now, and again before any
-shell command you expect to run for many minutes (long builds, test sweeps).
-It refreshes your claim's lease so the dashboard can tell you are alive and
-working rather than wedged. If a heartbeat ever fails, your claim was reclaimed
-or closed out from under you — stop working this bead immediately.
+**Claim ownership and signal liveness:** routing claims the workflow step, but
+`$WORK_BEAD_ID` is the source work bead. Claim it before the first heartbeat;
+if the claim fails, stop instead of working an unowned bead:
+```bash
+if ! gc bd update "$WORK_BEAD_ID" --claim; then
+  echo "unable to claim source work bead; refusing to continue" >&2
+  exit 1
+fi
+gc bd heartbeat "$WORK_BEAD_ID" || {
+  echo "source work bead heartbeat failed; refusing to continue" >&2
+  exit 1
+}
+```
+The heartbeat refreshes your source claim's lease so the dashboard can tell you
+are alive and working rather than wedged. Run it again before any shell command
+you expect to run for many minutes (long builds, test sweeps). If a heartbeat
+ever fails, your claim was reclaimed or closed out from under you — stop working
+this bead immediately.
 
 **2. Implement the solution and verify it:**
 

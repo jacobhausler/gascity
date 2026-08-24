@@ -22,10 +22,10 @@ type formulaFile struct {
 
 // readFormula decodes a formula TOML from the embedded core pack.
 //
-// file stays parameterized even though every current caller passes
-// mol-polecat-base.toml: the pack ships sibling formulas (mol-polecat-commit,
-// mol-polecat-report) that inherit these steps, and the next test to pin one of
-// them reads it through this same helper.
+// file stays parameterized because callers pin behavior across the embedded
+// core pack's formulas, including mol-polecat-base.toml and mol-do-work.toml.
+// The pack also ships sibling formulas (mol-polecat-commit, mol-polecat-report)
+// that inherit these steps, so tests for any of them read through this helper.
 //
 //nolint:unparam // see above
 func readFormula(t *testing.T, file string) formulaFile {
@@ -52,6 +52,84 @@ func formulaStep(t *testing.T, f formulaFile, id string) string {
 	}
 	t.Fatalf("formula %s has no step %q", f.Formula, id)
 	return ""
+}
+
+// TestMolDoWorkClaimsSourceBeforeFirstHeartbeat pins the ownership boundary
+// between the routed formula step and the convoy child it actually works.
+// Routing claims the step (which may be a gcg wrapper), while this formula
+// reads and heartbeats WORK_BEAD_ID. The source claim must therefore happen
+// first, and a failed claim must fail closed before any work starts.
+func TestMolDoWorkClaimsSourceBeforeFirstHeartbeat(t *testing.T) {
+	step := formulaStep(t, readFormula(t, "mol-do-work.toml"), "do-work")
+
+	claim := `gc bd update "$WORK_BEAD_ID" --claim`
+	firstHeartbeat := `gc bd heartbeat "$WORK_BEAD_ID"`
+	claimAt := strings.Index(step, claim)
+	if claimAt < 0 {
+		t.Fatalf("do-work must claim the source WORK_BEAD_ID before heartbeating it: missing %q", claim)
+	}
+	heartbeatAt := strings.Index(step, firstHeartbeat)
+	if heartbeatAt < 0 {
+		t.Fatalf("do-work must heartbeat the source WORK_BEAD_ID: missing %q", firstHeartbeat)
+	}
+	if claimAt > heartbeatAt {
+		t.Fatalf("source claim at byte %d follows first source heartbeat at byte %d", claimAt, heartbeatAt)
+	}
+
+	// A by-ID claim can lose ownership or fail to route. The formula must not
+	// proceed under an assumption that the source is owned, so the claim is
+	// guarded and exits before the first heartbeat on failure.
+	if !strings.Contains(step, "if ! "+claim+"; then") {
+		t.Fatalf("source claim must be guarded with `if ! ...; then` so claim failure stops execution")
+	}
+	claimGuardAt := strings.Index(step, "if ! "+claim+"; then")
+	firstHeartbeatAt := strings.Index(step, firstHeartbeat)
+	claimGuard := step[claimGuardAt:firstHeartbeatAt]
+	if !strings.Contains(claimGuard, "exit 1") {
+		t.Fatalf("source claim failure must exit before the first heartbeat; guard is %q", claimGuard)
+	}
+
+	// The first heartbeat is itself an ownership check. A failed refresh means
+	// the source lease is gone, so implementation instructions must not follow
+	// a bare heartbeat that leaves the worker running without a live claim.
+	implementationAt := strings.Index(step, "**2. Implement the solution and verify it:")
+	if implementationAt < 0 {
+		t.Fatal("do-work is missing its implementation section")
+	}
+	heartbeatGuard := step[firstHeartbeatAt:implementationAt]
+	if !strings.Contains(heartbeatGuard, firstHeartbeat+" ||") {
+		t.Fatalf("first source heartbeat must fail closed with `||` before implementation begins; guard is %q", heartbeatGuard)
+	}
+	if !strings.Contains(heartbeatGuard, "exit 1") {
+		t.Fatalf("first source heartbeat failure must exit before implementation begins; guard is %q", heartbeatGuard)
+	}
+
+	// The routed gcg wrapper is a control-plane step, not the source work bead;
+	// no liveness command may accidentally target it.
+	for _, line := range strings.Split(step, "\n") {
+		if !strings.Contains(line, "gc bd heartbeat") {
+			continue
+		}
+		if !strings.Contains(line, `"$WORK_BEAD_ID"`) {
+			t.Errorf("heartbeat must target source WORK_BEAD_ID, got %q", strings.TrimSpace(line))
+		}
+		if strings.Contains(line, "GC_BEAD_ID") {
+			t.Errorf("heartbeat must never target the gcg wrapper GC_BEAD_ID, got %q", strings.TrimSpace(line))
+		}
+	}
+
+	// Do not teach workers that an unconditional by-ID claim is safe despite
+	// ownership. Conflicts and routing failures must remain visible and stop.
+	lower := strings.ToLower(step)
+	for _, unsafe := range []string{
+		"safe even if",
+		"regardless of current state",
+		"whether or not something else already holds",
+	} {
+		if strings.Contains(lower, unsafe) {
+			t.Errorf("do-work must not describe source claiming as unconditionally safe; found %q", unsafe)
+		}
+	}
 }
 
 // TestPolecatPreflightSearchesLedgerBeforeFiling pins the search-before-file
