@@ -161,7 +161,10 @@ if [ -z "$RUNTIME_ACTOR" ]; then
   echo "mol-do-work drain requires a runtime actor to verify bead ownership" >&2
   exit 1
 fi
-CURRENT_BEAD_ID="$(gc hook current --id-only 2>/dev/null || true)"
+if ! CURRENT_BEAD_ID="$(gc hook current --id-only 2>/dev/null)"; then
+  echo "mol-do-work drain could not read the current claim; refusing to use a fallback bead id" >&2
+  exit 1
+fi
 STARTUP_BEAD_ID="${CURRENT_BEAD_ID:-${GC_BEAD_ID:-${GC_TRIGGER_BEAD_ID:-}}}"
 if [ -z "$STARTUP_BEAD_ID" ]; then
   echo "mol-do-work drain requires a current or startup bead id to resolve its workflow root" >&2

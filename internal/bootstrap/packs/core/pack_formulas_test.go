@@ -138,10 +138,11 @@ func TestMolDoWorkClaimsSourceBeforeFirstHeartbeat(t *testing.T) {
 
 // TestMolDoWorkDrainResolvesCurrentContinuation pins the drain handoff
 // contract. Pool shells do not receive the dispatch-only bead-id variables, so
-// the drain seeds resolution from gc hook current and falls back to those vars
-// only for direct/legacy lanes. A stale current bead is not closed: its root
-// selects the unique ready mol-do-work.drain continuation. Every ambiguity,
-// identity mismatch, read failure, or close failure stops before drain-ack.
+// the drain seeds resolution from gc hook current and permits those vars only
+// after a successful current-claim read. A stale current bead is not closed:
+// its root selects the unique ready mol-do-work.drain continuation. Every
+// ambiguity, identity mismatch, read failure, or close failure stops before
+// drain-ack.
 func TestMolDoWorkDrainResolvesCurrentContinuation(t *testing.T) {
 	step := formulaStep(t, readFormula(t, "mol-do-work.toml"), "drain")
 
@@ -153,7 +154,7 @@ func TestMolDoWorkDrainResolvesCurrentContinuation(t *testing.T) {
 	if !strings.Contains(step[actorAt:], `if [ -z "$RUNTIME_ACTOR" ]; then`) {
 		t.Fatal("drain must fail closed when BEADS_ACTOR is missing")
 	}
-	currentID := `CURRENT_BEAD_ID="$(gc hook current --id-only 2>/dev/null || true)"`
+	currentID := `CURRENT_BEAD_ID="$(gc hook current --id-only 2>/dev/null)"`
 	currentIDAt := strings.Index(step, currentID)
 	if currentIDAt < 0 {
 		t.Fatalf("drain must seed resolution from gc hook current: missing %q", currentID)
@@ -279,6 +280,26 @@ func TestMolDoWorkDrainResolvesCurrentContinuation(t *testing.T) {
 	}
 }
 
+// TestMolDoWorkDrainFailsClosedWhenCurrentClaimCannotBeRead pins the
+// session-front-door boundary: a hook-current identity/read error must not be
+// converted into an environment fallback that can name a different bead.
+func TestMolDoWorkDrainFailsClosedWhenCurrentClaimCannotBeRead(t *testing.T) {
+	step := formulaStep(t, readFormula(t, "mol-do-work.toml"), "drain")
+
+	if strings.Contains(step, `gc hook current --id-only 2>/dev/null || true`) {
+		t.Fatal("drain must not ignore gc hook current errors before selecting a bead")
+	}
+	guard := `if ! CURRENT_BEAD_ID="$(gc hook current --id-only 2>/dev/null)"; then`
+	if !strings.Contains(step, guard) {
+		t.Fatalf("drain must fail closed around the current-claim read: missing %q", guard)
+	}
+	guardAt := strings.Index(step, guard)
+	guardEnd := strings.Index(step[guardAt:], "\nfi")
+	if guardEnd < 0 || !strings.Contains(step[guardAt:guardAt+guardEnd], "exit 1") {
+		t.Fatal("current-claim read failure must exit before any fallback seed or bead read")
+	}
+}
+
 func TestMolDoWorkUsesAppendNotes(t *testing.T) {
 	formula := readFormula(t, "mol-do-work.toml")
 	for _, step := range formula.Steps {
@@ -296,6 +317,7 @@ if [ "${1:-}" = "hook" ] && [ "${2:-}" = "current" ]; then
   exit 0
 fi
 if [ "${1:-}" = "bd" ] && [ "${2:-}" = "show" ]; then
+	printf 'show:%s\n' "${3:-}" >> "$FAKE_LOG"
   if [ "${FAKE_SHOW_RC:-0}" != "0" ]; then exit 1; fi
   printf '%s\n' "${FAKE_SEED_JSON:-[]}"
   exit 0
@@ -455,8 +477,9 @@ func runDrainHarness(t *testing.T, script string, tc drainHarnessCase) (string, 
 
 // TestMolDoWorkDrainShellScenarios executes the embedded drain instructions
 // against a hermetic fake gc. This covers the live current-claim path, stale
-// same-session continuation, env fallback, zero/ambiguous/wrong candidates,
-// reader failures, and close failures; every failure must omit drain-ack.
+// same-session continuation, explicit startup-seed fallback, zero/ambiguous/
+// wrong candidates, reader failures, and close failures; every failure must
+// omit drain-ack.
 func TestMolDoWorkDrainShellScenarios(t *testing.T) {
 	step := formulaStep(t, readFormula(t, "mol-do-work.toml"), "drain")
 	start := strings.Index(step, "```bash\n")
@@ -510,7 +533,7 @@ func TestMolDoWorkDrainShellScenarios(t *testing.T) {
 			readyJSON: `[]`,
 		},
 		{
-			name:          "env fallback foreign seed",
+			name:          "current hook failure rejects env fallback",
 			currentFailed: true,
 			seedJSON:      seedDrainForeign,
 			readyJSON:     `[]`,
@@ -542,13 +565,11 @@ func TestMolDoWorkDrainShellScenarios(t *testing.T) {
 			wantReady:   true,
 		},
 		{
-			name:          "env fallback direct drain",
+			name:          "current hook failure rejects direct env seed",
 			currentFailed: true,
 			seedJSON:      seedDrain,
 			readyJSON:     `[]`,
 			env:           map[string]string{"GC_TRIGGER_BEAD_ID": "drain-current"},
-			wantSuccess:   true,
-			wantID:        "drain-current",
 		},
 		{
 			name:          "no seed id",
@@ -639,6 +660,9 @@ func TestMolDoWorkDrainShellScenarios(t *testing.T) {
 			}
 			if tc.wantReady && !strings.Contains(log, "ready\n") {
 				t.Fatalf("close log = %q, want federated ready lookup", log)
+			}
+			if tc.currentFailed && strings.Contains(log, "show:") {
+				t.Fatalf("close log = %q, current-claim failure must stop before reading a fallback seed bead", log)
 			}
 			if !tc.wantReady && strings.Contains(log, "ready\n") {
 				t.Fatalf("close log = %q, did not expect ready lookup", log)
