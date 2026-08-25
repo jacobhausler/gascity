@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
 )
@@ -53,6 +54,94 @@ func TestGraphTable(t *testing.T) {
 	// Summary line.
 	if !strings.Contains(out, "3 bead(s)") {
 		t.Errorf("missing summary line:\n%s", out)
+	}
+}
+
+func TestGraphMembershipJSONRoutesGraphClassAndIncludesClosedMetadata(t *testing.T) {
+	work := beads.NewMemStore()
+	graph := &beads.MemStore{IDPrefix: "gcg"}
+	root, err := graph.Create(beads.Bead{Title: "root", Type: "molecule", Metadata: beads.StringMap{
+		"gc.formula_hash": "hash-root",
+	}})
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	active, err := graph.Create(beads.Bead{Title: "active", Type: "step", ParentID: root.ID, Metadata: beads.StringMap{
+		beadmeta.RootBeadIDMetadataKey: "" + root.ID,
+		"gc.cleanup_owner":             "gc-owner",
+		"gc.cleanup_fence":             "fence-1",
+	}})
+	if err != nil {
+		t.Fatalf("create active member: %v", err)
+	}
+	closed, err := graph.Create(beads.Bead{Title: "closed", Type: "step", ParentID: root.ID, Metadata: beads.StringMap{
+		beadmeta.RootBeadIDMetadataKey: root.ID,
+	}})
+	if err != nil {
+		t.Fatalf("create closed member: %v", err)
+	}
+	if err := graph.Close(closed.ID); err != nil {
+		t.Fatalf("close member: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doGraphMembership(graphStoresOver(work, graph), root.ID, 16, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doGraphMembership = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	var payload graphMembershipJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if payload.SchemaVersion != "1" || !payload.OK {
+		t.Fatalf("payload metadata = %+v", payload)
+	}
+	if payload.Membership != string(beads.MembershipDirectRootID) {
+		t.Fatalf("membership = %q, want %q", payload.Membership, beads.MembershipDirectRootID)
+	}
+	if payload.Root == nil || payload.Root.ID != root.ID {
+		t.Fatalf("root = %+v, want %s", payload.Root, root.ID)
+	}
+	if payload.Total != 3 || payload.Truncated {
+		t.Fatalf("total/truncated = %d/%t, want 3/false", payload.Total, payload.Truncated)
+	}
+	rows := map[string]graphMembershipBead{}
+	for _, row := range payload.Members {
+		rows[row.ID] = row
+	}
+	if len(rows) != 2 || rows[active.ID].Status != "open" || rows[closed.ID].Status != "closed" {
+		t.Fatalf("members = %+v, want active and closed rows", rows)
+	}
+	if rows[active.ID].Metadata["gc.cleanup_owner"] != "gc-owner" || rows[active.ID].Metadata["gc.cleanup_fence"] != "fence-1" {
+		t.Fatalf("active metadata = %+v, want cleanup owner/fence", rows[active.ID].Metadata)
+	}
+}
+
+func TestGraphMembershipJSONMarksBoundedResults(t *testing.T) {
+	store := beads.NewMemStore()
+	root, err := store.Create(beads.Bead{Title: "root", Type: "molecule"})
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := store.Create(beads.Bead{Title: "member", Type: "step", Metadata: beads.StringMap{
+			beadmeta.RootBeadIDMetadataKey: root.ID,
+		}}); err != nil {
+			t.Fatalf("create member %d: %v", i, err)
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doGraphMembership(graphStoresOver(store, nil), root.ID, 2, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doGraphMembership = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	var payload graphMembershipJSONResult
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not JSON: %v\n%s", err, stdout.String())
+	}
+	if payload.Total != 2 || len(payload.Members) != 1 || !payload.Truncated {
+		t.Fatalf("bounded payload = total %d members %d truncated %t, want 2/1/true", payload.Total, len(payload.Members), payload.Truncated)
 	}
 }
 

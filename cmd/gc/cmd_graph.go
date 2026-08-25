@@ -42,6 +42,7 @@ By default prints a table. Use --tree for a Unicode tree view or
 	cmd.Flags().BoolVar(&tree, "tree", false, "output Unicode dependency tree")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output JSONL summary")
 	cmd.MarkFlagsMutuallyExclusive("mermaid", "tree", "json")
+	cmd.AddCommand(newGraphMembershipCmd(stdout, stderr))
 	return cmd
 }
 
