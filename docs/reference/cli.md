@@ -1879,6 +1879,31 @@ gc graph gc-42 --mermaid     # Mermaid.js diagram
 | `--mermaid` | bool |  | output Mermaid.js flowchart |
 | `--tree` | bool |  | output Unicode dependency tree |
 
+| Subcommand | Description |
+|------------|-------------|
+| [gc graph membership](#gc-graph-membership) | Show bounded direct workflow membership for a graph root |
+
+## gc graph membership
+
+Show the root and its direct workflow members.
+
+Membership is defined by gc.root_bead_id metadata and spans active and closed
+rows. The result is always structured JSON and includes a truncation marker;
+callers must reject truncated results when they need a complete workflow.
+
+The read routes the root through the graph class binding before applying
+beads.DirectMembers, so a relocated graph root and its members are read from
+the owning store rather than from the work ledger alone.
+
+```
+gc graph membership <root-id> [flags]
+```
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--json` | bool |  | output structured JSON (the default) |
+| `--limit` | int | `64` | maximum number of root and member rows to emit |
+
 ## gc handoff
 
 Convenience command for context handoff.
