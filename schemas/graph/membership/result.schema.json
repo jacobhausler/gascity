@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "gc graph membership result",
+  "description": "A bounded direct-root-id membership projection. The root is separate from workflow member rows; both active and closed rows are in scope.",
+  "x-gc-jsonl": true,
+  "type": "object",
+  "required": ["schema_version", "ok", "root_id", "membership", "limit", "total", "truncated", "root", "members"],
+  "properties": {
+    "schema_version": { "const": "1" },
+    "ok": { "const": true },
+    "root_id": { "type": "string" },
+    "membership": { "const": "direct-root-id" },
+    "limit": { "type": "integer", "minimum": 1 },
+    "total": { "type": "integer", "minimum": 0 },
+    "truncated": { "type": "boolean" },
+    "root": {
+      "anyOf": [
+        { "$ref": "#/$defs/bead" },
+        { "type": "null" }
+      ]
+    },
+    "members": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/bead" }
+    }
+  },
+  "$defs": {
+    "bead": {
+      "type": "object",
+      "required": ["id", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "status": { "type": "string" },
+        "issue_type": { "type": "string" },
+        "parent": { "type": "string" },
+        "ref": { "type": "string" },
+        "description": { "type": "string" },
+        "labels": { "type": "array", "items": { "type": "string" } },
+        "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

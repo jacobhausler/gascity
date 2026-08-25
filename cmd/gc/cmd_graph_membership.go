@@ -21,7 +21,7 @@ type graphMembershipJSONResult struct {
 	Limit         int                   `json:"limit"`
 	Total         int                   `json:"total"`
 	Truncated     bool                  `json:"truncated"`
-	Root          *graphMembershipBead  `json:"root,omitempty"`
+	Root          *graphMembershipBead  `json:"root"`
 	Members       []graphMembershipBead `json:"members"`
 }
 
