@@ -161,6 +161,15 @@ func seqLineAt(f *os.File, off int64) (seq uint64, start int64, ok bool) {
 //
 // Returns 0 (full scan) whenever the boundary cannot be established, so a log
 // that violates the ordering invariant degrades in speed, never in correctness.
+//
+// That "never in correctness" claim only holds when the invariant is intact:
+// sort.Search below assumes seq is strictly increasing across the whole file,
+// not just at the probed boundary, so a mid-file violation would make it
+// converge on the wrong offset and silently skip events, not merely fall back
+// to a full scan. The invariant is upheld by the recorder's write path:
+// writeRecordLocked and the AppendBatch batch path both compute the next seq
+// as max(readLatestActiveSeq, r.seq) under r.mu plus an flock on the active
+// file (internal/events/recorder.go:302-320), so seq only ever advances.
 func activeScanStart(f *os.File, size int64, afterSeq uint64) int64 {
 	if afterSeq == 0 || size <= 0 {
 		return 0
@@ -256,7 +265,7 @@ func readFilteredTracked(path string, filter Filter) ([]Event, map[eventSeqWindo
 		scanFrom = activeScanStart(f, st.Size(), filter.AfterSeq)
 	}
 	if _, err := f.Seek(scanFrom, io.SeekStart); err != nil {
-		return result, fmt.Errorf("seeking events: %w", err)
+		return result, listed, fmt.Errorf("seeking events: %w", err)
 	}
 
 	scanner := bufio.NewScanner(f)
