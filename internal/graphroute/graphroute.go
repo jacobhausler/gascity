@@ -57,6 +57,11 @@ type GraphRouteBinding struct {
 	DirectSessionID string
 	RigContext      string
 	MetadataOnly    bool
+	// IndependentSteps keeps a metadata-only route claimable by any fresh
+	// pool session instead of pinning the workflow to the first claiming
+	// session. One-shot agent lifecycles use this because their runtime exits
+	// after each bounded invocation and cannot own cross-step continuation.
+	IndependentSteps bool
 }
 
 type graphStepTarget struct {
@@ -189,11 +194,19 @@ func ApplyGraphRouteBinding(step *formula.RecipeStep, binding GraphRouteBinding)
 	}
 	step.Metadata[beadmeta.RoutedToMetadataKey] = binding.QualifiedName
 	if binding.MetadataOnly {
-		// Pool-routed step: stamp continuation group so preassignHookContinuationGroup
-		// pre-assigns all molecule steps to the claiming slot, preventing scatter
-		// across pool slots (fixes #2978).
-		step.Metadata[beadmeta.ContinuationGroupMetadataKey] = poolWorkflowContinuationGroup
-		step.Metadata[beadmeta.SessionAffinityMetadataKey] = "require"
+		if binding.IndependentSteps {
+			// A one-shot runtime exits after one bounded invocation. Keep each
+			// executable step on the pool route, but do not pre-assign later steps
+			// to the session that is about to exit.
+			delete(step.Metadata, beadmeta.ContinuationGroupMetadataKey)
+			delete(step.Metadata, beadmeta.SessionAffinityMetadataKey)
+		} else {
+			// Persistent pool-routed step: stamp continuation group so
+			// preassignHookContinuationGroup pre-assigns all molecule steps to the
+			// claiming slot, preventing scatter across pool slots (fixes #2978).
+			step.Metadata[beadmeta.ContinuationGroupMetadataKey] = poolWorkflowContinuationGroup
+			step.Metadata[beadmeta.SessionAffinityMetadataKey] = "require"
+		}
 		step.Assignee = ""
 		return
 	}
@@ -204,6 +217,19 @@ func ApplyGraphRouteBinding(step *formula.RecipeStep, binding GraphRouteBinding)
 		step.Metadata[beadmeta.SessionNameMetadataKey] = binding.SessionName
 	}
 	step.Assignee = binding.SessionName
+}
+
+// GraphRouteBindingForAgent derives the config-backed routing behavior for an
+// agent. Pool routes stay metadata-only; one-shot pools additionally make each
+// graph step an independent claim because no runtime survives to carry session
+// affinity into the next step.
+func GraphRouteBindingForAgent(agentCfg config.Agent) GraphRouteBinding {
+	binding := GraphRouteBinding{QualifiedName: agentutil.RoutedToIdentity(&agentCfg)}
+	if agentCfg.SupportsInstanceExpansion() {
+		binding.MetadataOnly = true
+		binding.IndependentSteps = agentCfg.Lifecycle == config.AgentLifecycleOneShot
+	}
+	return binding
 }
 
 // ApplyGraphControlRouteBinding routes control steps to the store-scoped
@@ -431,9 +457,8 @@ func ResolveGraphStepBindingWithVars(stepID string, stepByID map[string]*formula
 	if !ok {
 		return GraphRouteBinding{}, fmt.Errorf("step %s: unknown formulas v2 target %q", stepID, target.value)
 	}
-	binding := GraphRouteBinding{QualifiedName: agentutil.RoutedToIdentity(&agentCfg)}
-	if agentCfg.SupportsInstanceExpansion() {
-		binding.MetadataOnly = true
+	binding := GraphRouteBindingForAgent(agentCfg)
+	if binding.MetadataOnly {
 		cache[stepID] = binding
 		return binding, nil
 	}
@@ -647,15 +672,19 @@ func ApplyGraphRouting(recipe *formula.Recipe, a *config.Agent, routedTo string,
 		a = &resolved
 	}
 
-	var sessionName string
-	if !a.SupportsInstanceExpansion() {
-		sessionName = agentutil.LookupSessionName(store, cityName, a.QualifiedName(), cfg.Workspace.SessionTemplate)
-		if sessionName == "" {
+	defaultRoute := GraphRouteBindingForAgent(*a)
+	// routedTo is the caller's already-normalized persisted identity. Preserve
+	// it rather than recomputing in case the caller resolved a compatibility
+	// spelling that agentutil intentionally keeps stable on the wire.
+	defaultRoute.QualifiedName = routedTo
+	if !defaultRoute.MetadataOnly {
+		defaultRoute.SessionName = agentutil.LookupSessionName(store, cityName, a.QualifiedName(), cfg.Workspace.SessionTemplate)
+		if defaultRoute.SessionName == "" {
 			return fmt.Errorf("could not resolve session name for %q", a.QualifiedName())
 		}
 	}
 	routeVars := GraphWorkflowRouteVars(recipe, vars)
-	return DecorateGraphWorkflowRecipe(recipe, routeVars, sourceBeadID, scopeKind, scopeRef, storeRef, routedTo, sessionName, store, cityName, cfg, deps)
+	return DecorateGraphWorkflowRecipeWithDefaultBinding(recipe, routeVars, sourceBeadID, scopeKind, scopeRef, storeRef, defaultRoute, store, cityName, cfg, deps)
 }
 
 // stampLegacyRecipeRouting mirrors the graph.v2 path in ApplyGraphRouteBinding:
