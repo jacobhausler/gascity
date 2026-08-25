@@ -1388,6 +1388,14 @@ func cmdWorkflowDelete(workflowID string, force, deleteBeads bool, stdout, stder
 		fmt.Fprintf(stderr, "gc workflow delete: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}
+	// Workflow roots and their direct members are Graph-class beads on a
+	// relocated city. The scope stores retain the pre-cutover copies, so a
+	// directory-only scan answers "no beads" even though the authoritative
+	// graph binding has the live workflow. Keep the work stores in the scan for
+	// unrelocated/work-class workflows, and add the binding as the graph leg.
+	if graphStore := cityGraphClassBinding(cityPath); graphStore != nil {
+		stores = append(stores, convoyStoreView{path: cityPath, store: graphStore})
+	}
 	for _, info := range stores {
 		found := findWorkflowBeads(info.store, workflowID)
 		if len(found) == 0 {
@@ -2492,6 +2500,14 @@ func findWorkflowBeads(store beads.Store, workflowID string) []beads.Bead {
 		rootSeen[root.ID] = struct{}{}
 		rootIDs = append(rootIDs, root.ID)
 		addBead(root)
+		// DirectMembers is the workflow membership contract. In particular it
+		// includes closed and ephemeral rows that a plain ListQuery over the
+		// scope's issue tier can miss.
+		if members, err := beads.DirectMembers(store, root.ID); err == nil {
+			for _, member := range members {
+				addBead(member)
+			}
+		}
 	}
 	if root, err := store.Get(workflowID); err == nil {
 		addRoot(root)
@@ -2509,10 +2525,7 @@ func findWorkflowBeads(store beads.Store, workflowID string) []beads.Bead {
 		}
 	}
 	for _, rootID := range rootIDs {
-		all, err := store.List(beads.ListQuery{
-			Metadata:      map[string]string{beadmeta.RootBeadIDMetadataKey: rootID},
-			IncludeClosed: true,
-		})
+		all, err := beads.DirectMembers(store, rootID)
 		if err != nil {
 			continue
 		}

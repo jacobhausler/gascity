@@ -892,6 +892,74 @@ func TestFindWorkflowBeadsResolvesLogicalWorkflowID(t *testing.T) {
 	}
 }
 
+func TestCmdWorkflowDeleteRoutesGraphRootAndMembersToBinding(t *testing.T) {
+	cityPath, cfg := migratedOneShotCLICity(t)
+	graphStore, relocated := graphClassBinding(cliStorageRoutes(cityPath))
+	if !relocated || graphStore == nil {
+		t.Fatal("migrated city did not resolve its graph class binding")
+	}
+	root := mustCreateInfraBead(t, graphStore, beads.Bead{
+		Title:  "graph workflow root",
+		Type:   "task",
+		Status: "open",
+		Metadata: map[string]string{
+			beadmeta.KindMetadataKey:         beadmeta.KindWorkflow,
+			beadmeta.RootStoreRefMetadataKey: "city:" + cfg.Workspace.Name,
+			beadmeta.WorkflowIDMetadataKey:   "wf-graph-delete",
+		},
+	})
+	member := mustCreateInfraBead(t, graphStore, beads.Bead{
+		Title:  "graph workflow member",
+		Type:   "task",
+		Status: "open",
+		Metadata: map[string]string{
+			beadmeta.RootBeadIDMetadataKey: root.ID,
+		},
+	})
+	work, err := openCityStoreAt(cityPath)
+	if err != nil {
+		t.Fatalf("openCityStoreAt: %v", err)
+	}
+	t.Cleanup(func() { _ = closeBeadStoreHandle(work) })
+
+	var previewOut, previewErr bytes.Buffer
+	if code := cmdWorkflowDelete(root.ID, false, false, &previewOut, &previewErr); code != 0 {
+		t.Fatalf("preview returned %d, want 0; stdout=%s stderr=%s", code, previewOut.String(), previewErr.String())
+	}
+	if !strings.Contains(previewOut.String(), "2 beads") || !strings.Contains(previewOut.String(), "Dry run") {
+		t.Fatalf("preview = %q, want the graph root and member plus dry-run notice", previewOut.String())
+	}
+	for _, id := range []string{root.ID, member.ID} {
+		bead, err := graphStore.Get(id)
+		if err != nil {
+			t.Fatalf("graph Get(%s) after preview: %v", id, err)
+		}
+		if bead.Status != "open" || bead.Metadata[beadmeta.OutcomeMetadataKey] != "" {
+			t.Fatalf("graph bead %s mutated during preview: status=%q metadata=%#v", id, bead.Status, bead.Metadata)
+		}
+		if _, err := work.Get(id); !errors.Is(err, beads.ErrNotFound) {
+			t.Fatalf("work store unexpectedly answered graph bead %s: %v", id, err)
+		}
+	}
+
+	var forceOut, forceErr bytes.Buffer
+	if code := cmdWorkflowDelete(root.ID, true, false, &forceOut, &forceErr); code != 0 {
+		t.Fatalf("--force returned %d, want 0; stdout=%s stderr=%s", code, forceOut.String(), forceErr.String())
+	}
+	for _, id := range []string{root.ID, member.ID} {
+		bead, err := graphStore.Get(id)
+		if err != nil {
+			t.Fatalf("graph Get(%s) after --force: %v", id, err)
+		}
+		if bead.Status != "closed" || bead.Metadata[beadmeta.OutcomeMetadataKey] != beadmeta.OutcomeSkipped {
+			t.Fatalf("graph bead %s after --force = status %q outcome %q, want closed/skipped", id, bead.Status, bead.Metadata[beadmeta.OutcomeMetadataKey])
+		}
+		if _, err := work.Get(id); !errors.Is(err, beads.ErrNotFound) {
+			t.Fatalf("work store unexpectedly answered graph bead %s after --force: %v", id, err)
+		}
+	}
+}
+
 func TestDeleteWorkflowMatchesUsesCascadeWithoutPreClose(t *testing.T) {
 	store := beads.NewMemStore()
 	root, err := store.Create(beads.Bead{
