@@ -225,7 +225,7 @@ func TestMolDoWorkDrainResolvesCurrentContinuation(t *testing.T) {
 	if claimAt < 0 {
 		t.Fatalf("drain must claim the resolved step before closing it: missing %q", claimCommand)
 	}
-	closeCommand := `gc bd update "$DRAIN_BEAD_ID" --set-metadata gc.outcome=pass --status=closed --append-notes "Drain acknowledged."`
+	closeCommand := `gc bd update "$DRAIN_BEAD_ID" --set-metadata gc.outcome=pass --status=closed`
 	closeAt := strings.Index(step, closeCommand)
 	if closeAt < 0 {
 		t.Fatalf("drain must close the exact resolved step id: missing %q", closeCommand)
@@ -306,6 +306,28 @@ func TestMolDoWorkUsesAppendNotes(t *testing.T) {
 		if strings.Contains(strings.ReplaceAll(step.Description, "--append-notes", ""), "--notes") {
 			t.Fatalf("mol-do-work step %q must not use destructive --notes; use --append-notes", step.ID)
 		}
+	}
+}
+
+// TestMolDoWorkDrainCloseUsesNativeGraphUpdateFlags pins the graph-store
+// boundary for the class-owned drain step. The closed graph update parser only
+// serves fields represented by its native update object; drain must not emit
+// bd-only note flags that the graph path rejects.
+func TestMolDoWorkDrainCloseUsesNativeGraphUpdateFlags(t *testing.T) {
+	step := formulaStep(t, readFormula(t, "mol-do-work.toml"), "drain")
+
+	var closeLine string
+	for _, line := range strings.Split(step, "\n") {
+		if strings.Contains(line, `gc bd update "$DRAIN_BEAD_ID"`) && strings.Contains(line, "--status=closed") {
+			closeLine = line
+			break
+		}
+	}
+	if closeLine == "" {
+		t.Fatal("drain must close DRAIN_BEAD_ID through a native graph update")
+	}
+	if strings.Contains(closeLine, "--append-notes") {
+		t.Fatalf("drain close emits unsupported graph update flag --append-notes: %q", closeLine)
 	}
 }
 

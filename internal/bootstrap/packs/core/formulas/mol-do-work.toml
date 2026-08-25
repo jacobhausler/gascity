@@ -224,7 +224,7 @@ if ! gc bd update "$DRAIN_BEAD_ID" --claim; then
   echo "mol-do-work drain could not claim $DRAIN_BEAD_ID; refusing to acknowledge drain" >&2
   exit 1
 fi
-if ! gc bd update "$DRAIN_BEAD_ID" --set-metadata gc.outcome=pass --status=closed --append-notes "Drain acknowledged."; then
+if ! gc bd update "$DRAIN_BEAD_ID" --set-metadata gc.outcome=pass --status=closed; then
   echo "mol-do-work drain could not close $DRAIN_BEAD_ID; refusing to acknowledge drain" >&2
   exit 1
 fi
