@@ -216,6 +216,10 @@ type hookClaimOps struct {
 	// which the step's shell can later learn which bead it is running.
 	// Best-effort.
 	StampSessionClaim hookStampSessionClaimFunc
+	// ReadSessionTriggerBead reads the demand trigger id off the calling session's
+	// own bead. Diagnostics only (recordDemandClaimDivergence), strictly after the
+	// drain is written; a read error classifies as unknown and never fails a claim.
+	ReadSessionTriggerBead func(sessionID string) (string, error)
 	// ReadWorkMeta is the post-stamp authoritative readback used only to
 	// establish the durable lifecycle-start emission point.
 	ReadWorkMeta             func(context.Context, string, []string, string, string) (beads.Bead, error)
@@ -479,6 +483,9 @@ func (ops *hookClaimOps) applyDefaults() {
 	}
 	if ops.StampSessionClaim == nil {
 		ops.StampSessionClaim = hookStampSessionCurrentClaim
+	}
+	if ops.ReadSessionTriggerBead == nil {
+		ops.ReadSessionTriggerBead = hookReadSessionTriggerBead
 	}
 	if ops.PublishRunMap == nil {
 		ops.PublishRunMap = writeRunMap

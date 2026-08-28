@@ -957,9 +957,8 @@ func refreshConfiguredNamedStartCandidate(
 	// Fold the resolver's Info too, not just the params: the resolve may have
 	// durably cleared a stale trigger stamp (bindNamedSessionTriggerBead,
 	// gascity#4373), and buildPreparedStartWithWorkDirResolver re-derives the
-	// launch env from candidate.info via sessionTriggerBeadEnv. Keeping the
-	// pre-call Info here would hand the seat starting on the clearing tick the
-	// stale GC_TRIGGER_BEAD_ID the clear just removed.
+	// launch context from candidate.info. The trigger remains on the session
+	// bead for diagnostics and is no longer copied into the seat environment.
 	candidate.info = refreshedInfo
 	return candidate
 }
@@ -1225,9 +1224,6 @@ func buildPreparedStartWithWorkDirResolver(
 	if gcProvider := sessionpkg.ProviderFamilyFromInfo(candidate.info, ""); gcProvider != "" {
 		agentCfg.Env = mergeEnv(agentCfg.Env, map[string]string{"GC_PROVIDER": gcProvider})
 	}
-	if triggerEnv := sessionTriggerBeadEnv(candidate.info); len(triggerEnv) > 0 {
-		agentCfg.Env = mergeEnv(agentCfg.Env, triggerEnv)
-	}
 	agentCfg = runtime.SyncWorkDirEnv(agentCfg)
 	return &preparedStart{
 		candidate:       candidate,
@@ -1242,28 +1238,14 @@ func buildPreparedStartWithWorkDirResolver(
 	}, candidate.info, nil
 }
 
-// sessionTriggerBeadEnv reads the trigger-bead identity off the typed twin
-// (Info.TriggerBeadID / Info.TriggerBeadStoreRef, verbatim raw mirrors) instead of
-// the raw bead metadata. The trigger key IS mutated on the start-prep path —
-// refreshConfiguredNamedStartCandidate runs bindNamedSessionTriggerBead, which
-// clears a stamp whose target is no longer workable (gascity#4373) — so
-// coherence here depends on that refresh folding its returned Info onto
-// candidate.info, not on the key being immutable.
-func sessionTriggerBeadEnv(info sessionpkg.Info) map[string]string {
-	triggerBeadID := strings.TrimSpace(info.TriggerBeadID)
-	if triggerBeadID == "" {
-		return nil
-	}
-	env := map[string]string{
-		"GC_TRIGGER_BEAD_ID":      triggerBeadID,
-		"GC_TRIGGER_WORK_BEAD_ID": triggerBeadID,
-	}
-	if storeRef := strings.TrimSpace(info.TriggerBeadStoreRef); storeRef != "" {
-		env["GC_TRIGGER_BEAD_STORE_REF"] = storeRef
-		env["GC_TRIGGER_WORK_STORE_REF"] = storeRef
-	}
-	return env
-}
+// The start path deliberately exports NO trigger-bead environment. gc.trigger_bead_id
+// is stamped only on pool-managed session beads (poolTriggerMetadata /
+// bindPoolSessionTriggerBead), so the former sessionTriggerBeadEnv put a real,
+// resolvable, FOREIGN bead id into exactly the pool shell that must never see one:
+// the close idiom "${GC_BEAD_ID:-${GC_TRIGGER_BEAD_ID:-…}}" then closed the
+// controller's stale demand hint instead of the seat's own claim. The trigger id
+// remains on the session bead for diagnostics (idle_nudge.go, demand_divergence.go),
+// and the seat's only shell-visible answer is `gc hook current`.
 
 // parseSessionTemplateOverridesForLaunch decodes the per-session template_overrides
 // off the typed twin (Info.TemplateOverrides, verbatim) instead of re-projecting the

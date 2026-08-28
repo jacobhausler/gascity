@@ -54,6 +54,19 @@ func hookStampSessionCurrentClaim(sessionID, beadID string) error {
 	return err
 }
 
+// hookReadSessionTriggerBead reads the demand trigger id off the calling
+// session's own bead, through the same relocation-aware front door. It replaces
+// the former $GC_TRIGGER_WORK_BEAD_ID shell read in the divergence diagnostics:
+// the controller no longer exports an id-shaped trigger into a seat's shell, and
+// the session bead is where the id has always lived.
+func hookReadSessionTriggerBead(sessionID string) (string, error) {
+	sessFront, err := sessionCurrentClaimFrontDoor()
+	if err != nil {
+		return "", err
+	}
+	return sessFront.TriggerBeadID(strings.TrimSpace(sessionID))
+}
+
 // hookSessionDrainPending reports whether the session identified by sessionID is
 // already draining. It is the production implementation of the
 // hookClaimOps.DrainPending seam — the F-D claim fence's only input.

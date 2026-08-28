@@ -58,7 +58,17 @@ func recordDemandClaimDivergence(reason, dir string, opts hookClaimOptions, ops 
 	if sessionID == "" {
 		return
 	}
-	triggerID := hookClaimEnvValue(opts.Env, "GC_TRIGGER_WORK_BEAD_ID")
+	// The trigger id is read off the SESSION BEAD, never off the seat's shell.
+	// The controller no longer exports an id-shaped trigger into a pool shell
+	// (build_desired_state.go): a resolvable foreign bead id there is
+	// indistinguishable from a close target. A read failure classifies as
+	// unknown — a diagnostics counter must never become a second failure mode.
+	triggerID := ""
+	if ops.ReadSessionTriggerBead != nil {
+		if id, err := ops.ReadSessionTriggerBead(sessionID); err == nil {
+			triggerID = strings.TrimSpace(id)
+		}
+	}
 	status, classification := classifyDemandTrigger(triggerID, dir, opts, ops)
 	payload, err := json.Marshal(events.SessionDemandClaimDivergencePayload{
 		SessionID:            sessionID,
@@ -124,6 +134,9 @@ func classifyDemandTrigger(triggerID, dir string, opts hookClaimOptions, ops hoo
 // driven directly in tests without constructing a whole claim.
 func demandDivergenceOpsForBead(bead beads.Bead, err error) hookClaimOps {
 	return hookClaimOps{
+		// The seat's session bead names this row as its demand trigger — the
+		// session-bead read that replaced the retired shell variable.
+		ReadSessionTriggerBead: func(string) (string, error) { return bead.ID, nil },
 		ReadWorkMeta: func(context.Context, string, []string, string, string) (beads.Bead, error) {
 			return bead, err
 		},

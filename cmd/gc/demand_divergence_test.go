@@ -35,12 +35,13 @@ func divergenceOptions(env ...string) hookClaimOptions {
 }
 
 // demandSpawnEnv is the env a seat the controller minted from counted demand
-// carries: the presence-only origin marker plus the trigger id the diagnostics
-// classify against.
+// carries: the presence-only origin marker, and nothing else. The trigger id the
+// diagnostics classify against is read off the session bead, never off the seat's
+// shell — an id-shaped variable there is indistinguishable from a close target.
 const demandSpawnTriggerID = "wb-1"
 
 func demandSpawnEnv() []string {
-	return []string{"GC_SPAWN_ORIGIN=demand", "GC_TRIGGER_WORK_BEAD_ID=" + demandSpawnTriggerID}
+	return []string{"GC_SPAWN_ORIGIN=demand"}
 }
 
 // captureDivergence swaps the emitter seam and records what it was called with,
@@ -199,6 +200,62 @@ func TestSiblingRaceLoserClassifiesBenign(t *testing.T) {
 	}
 }
 
+// The trigger id comes off the SESSION BEAD, not the seat's shell. The shell
+// copy is gone precisely because a resolvable foreign bead id there is
+// indistinguishable from a close target; a stale GC_TRIGGER_* left over in some
+// inherited environment must not reach this classification either.
+func TestDivergenceTriggerIsReadFromTheSessionBeadNotTheShell(t *testing.T) {
+	rec := events.NewFake()
+	prev := demandDivergenceRecorder
+	demandDivergenceRecorder = func(io.Writer) events.Recorder { return rec }
+	t.Cleanup(func() { demandDivergenceRecorder = prev })
+
+	// A shell that still names some OTHER bead, plus a session bead naming the
+	// real trigger. The session bead wins.
+	opts := divergenceOptions("GC_SPAWN_ORIGIN=demand", "GC_TRIGGER_WORK_BEAD_ID=stale-foreign-bead")
+	stillThere := beads.Bead{
+		ID: demandSpawnTriggerID, Status: "open", Type: "task",
+		Metadata: map[string]string{beadmeta.RoutedToMetadataKey: "rig/worker"},
+	}
+
+	var stderr bytes.Buffer
+	recordDemandClaimDivergence(hookClaimReasonNoWork, "/rig", opts, demandDivergenceOpsForBead(stillThere, nil), &stderr)
+
+	if len(rec.Events) != 1 {
+		t.Fatalf("events = %d, want exactly 1", len(rec.Events))
+	}
+	var payload events.SessionDemandClaimDivergencePayload
+	if err := json.Unmarshal(rec.Events[0].Payload, &payload); err != nil {
+		t.Fatalf("decoding payload: %v", err)
+	}
+	if payload.TriggerBeadID != demandSpawnTriggerID {
+		t.Fatalf("trigger_bead_id = %q, want %q from the session bead", payload.TriggerBeadID, demandSpawnTriggerID)
+	}
+}
+
+// A session-bead read that fails classifies as unknown and still emits. A
+// diagnostics counter must never become a second failure mode on the drain path.
+func TestDivergenceTriggerReadFailureClassifiesUnknown(t *testing.T) {
+	rec := events.NewFake()
+	prev := demandDivergenceRecorder
+	demandDivergenceRecorder = func(io.Writer) events.Recorder { return rec }
+	t.Cleanup(func() { demandDivergenceRecorder = prev })
+
+	opts := divergenceOptions(demandSpawnEnv()...)
+	ops := demandDivergenceOpsForBead(beads.Bead{ID: demandSpawnTriggerID}, nil)
+	ops.ReadSessionTriggerBead = func(string) (string, error) { return "", errors.New("store down") }
+
+	var stderr bytes.Buffer
+	recordDemandClaimDivergence(hookClaimReasonNoWork, "/rig", opts, ops, &stderr)
+
+	if len(rec.Events) != 1 || rec.Events[0].Message != events.DemandClaimUnknown {
+		t.Fatalf("events = %+v, want one unknown-classified event", rec.Events)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want silence when the trigger cannot be read", stderr.String())
+	}
+}
+
 // The divergence case is the one that gets an operator-facing line, because it
 // is the invariant breaking rather than the system working.
 func TestDivergenceCaseIsReportedToTheWorkerStderr(t *testing.T) {
@@ -234,8 +291,8 @@ func TestNonDemandSpawnedSeatRecordsNoDivergence(t *testing.T) {
 	t.Cleanup(func() { demandDivergenceRecorder = prev })
 
 	var stderr bytes.Buffer
-	// Same trigger id, no spawn-origin marker.
-	opts := divergenceOptions("GC_TRIGGER_WORK_BEAD_ID=wb-1")
+	// Same trigger row on the session bead, no spawn-origin marker.
+	opts := divergenceOptions()
 	stillThere := beads.Bead{
 		ID: "wb-1", Status: "open", Type: "task",
 		Metadata: map[string]string{beadmeta.RoutedToMetadataKey: "rig/worker"},

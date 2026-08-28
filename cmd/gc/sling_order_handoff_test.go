@@ -19,9 +19,9 @@ import (
 //
 // Tick 1 counts demand and realizes a seat; the seat's FIRST hook cycle
 // discovers and claims through the ordinary generated-query path. The seat knows
-// it was spawned from demand (GC_SPAWN_ORIGIN) and knows which row justified it
-// (GC_TRIGGER_WORK_BEAD_ID) — and neither may influence what it claims. The pool
-// is pull: the controller scales capacity, the worker chooses.
+// it was spawned from demand (GC_SPAWN_ORIGIN, presence only) and the row that
+// justified it is recorded on its session bead — and neither may influence what
+// it claims. The pool is pull: the controller scales capacity, the worker chooses.
 
 // TestDemandSpawnedSeatClaimsThroughItsOwnQuery is the happy path the agreement
 // invariant is supposed to produce.
@@ -203,7 +203,6 @@ func (h *handoffFixture) env() []string {
 		"GC_SESSION_NAME=" + h.sessionName,
 		"GC_TEMPLATE=worker",
 		"GC_SPAWN_ORIGIN=demand",
-		"GC_TRIGGER_WORK_BEAD_ID=" + h.triggerID,
 	}
 }
 

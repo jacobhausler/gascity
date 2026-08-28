@@ -121,22 +121,28 @@ func (s *panicMetadataBatchStore) SetMetadataBatch(string, map[string]string) er
 	panic("metadata batch panic")
 }
 
-func TestSessionTriggerBeadEnv(t *testing.T) {
-	env := sessionTriggerBeadEnv(sessionpkg.Info{
-		TriggerBeadID:       "gp-59q",
-		TriggerBeadStoreRef: "rig:gascity-packs",
-	})
-	if got := env["GC_TRIGGER_BEAD_ID"]; got != "gp-59q" {
-		t.Fatalf("GC_TRIGGER_BEAD_ID = %q, want gp-59q", got)
-	}
-	if got := env["GC_TRIGGER_WORK_BEAD_ID"]; got != "gp-59q" {
-		t.Fatalf("GC_TRIGGER_WORK_BEAD_ID = %q, want gp-59q", got)
-	}
-	if got := env["GC_TRIGGER_BEAD_STORE_REF"]; got != "rig:gascity-packs" {
-		t.Fatalf("GC_TRIGGER_BEAD_STORE_REF = %q, want rig:gascity-packs", got)
-	}
-	if got := env["GC_TRIGGER_WORK_STORE_REF"]; got != "rig:gascity-packs" {
-		t.Fatalf("GC_TRIGGER_WORK_STORE_REF = %q, want rig:gascity-packs", got)
+// TestSeatEnvCarriesNoTriggerBeadID pins the deleted export: no start path and no
+// template resolution may put a resolvable bead id into a seat's shell under a
+// GC_TRIGGER_* name. gc.trigger_bead_id is stamped only on pool-managed session
+// beads, so such a name is always a FOREIGN id from the seat's point of view, and
+// the documented close idiom would prefer it over the seat's own claim.
+func TestSeatEnvCarriesNoTriggerBeadID(t *testing.T) {
+	for _, path := range []string{
+		"session_lifecycle_parallel.go",
+		"build_desired_state.go",
+	} {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for i, line := range strings.Split(string(src), "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "//") {
+				continue // prose may still name the retired keys
+			}
+			if strings.Contains(line, "GC_TRIGGER") {
+				t.Fatalf("%s:%d names a GC_TRIGGER_* environment key in code (%q); the demand marker is presence-only (GC_SPAWN_ORIGIN)", path, i+1, strings.TrimSpace(line))
+			}
+		}
 	}
 }
 

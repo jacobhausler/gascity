@@ -4144,17 +4144,21 @@ func TestRealizePoolDesiredSessionsBindsTriggerBeadToFreshSession(t *testing.T) 
 		t.Fatalf("desired sessions = %d, want 1", len(desired))
 	}
 	for _, tp := range desired {
-		if got := tp.Env["GC_TRIGGER_BEAD_ID"]; got != "gp-59q" {
-			t.Fatalf("GC_TRIGGER_BEAD_ID = %q, want gp-59q", got)
+		// The demand marker is presence-only. No id-shaped trigger reaches the
+		// seat's shell, or the close idiom would resolve to the controller's
+		// stale hint and close a foreign bead.
+		if got := tp.Env["GC_SPAWN_ORIGIN"]; got != "demand" {
+			t.Fatalf("GC_SPAWN_ORIGIN = %q, want demand", got)
 		}
-		if got := tp.Env["GC_TRIGGER_WORK_BEAD_ID"]; got != "gp-59q" {
-			t.Fatalf("GC_TRIGGER_WORK_BEAD_ID = %q, want gp-59q", got)
-		}
-		if got := tp.Env["GC_TRIGGER_BEAD_STORE_REF"]; got != "rig:gascity-packs" {
-			t.Fatalf("GC_TRIGGER_BEAD_STORE_REF = %q, want rig:gascity-packs", got)
-		}
-		if got := tp.Env["GC_TRIGGER_WORK_STORE_REF"]; got != "rig:gascity-packs" {
-			t.Fatalf("GC_TRIGGER_WORK_STORE_REF = %q, want rig:gascity-packs", got)
+		for _, key := range []string{
+			"GC_TRIGGER_BEAD_ID",
+			"GC_TRIGGER_WORK_BEAD_ID",
+			"GC_TRIGGER_BEAD_STORE_REF",
+			"GC_TRIGGER_WORK_STORE_REF",
+		} {
+			if got, ok := tp.Env[key]; ok {
+				t.Fatalf("pool seat env %s = %q, want unset", key, got)
+			}
 		}
 		if got := tp.Env["GC_PACKER_PACK"]; got != "packer" {
 			t.Fatalf("GC_PACKER_PACK = %q, want packer", got)

@@ -276,6 +276,20 @@ func (s *Store) CurrentClaimBeadID(id string) (string, error) {
 	return strings.TrimSpace(b.Metadata[beadmeta.CurrentClaimBeadIDMetadataKey]), nil
 }
 
+// TriggerBeadID returns the id of the work bead whose demand minted this session
+// ("" when unset). Only pool-managed seats carry it, and it is DIAGNOSTIC ONLY:
+// nothing on the claim path may read it to decide what to claim, and it is
+// deliberately not exported into the seat's shell (see the start path in
+// cmd/gc/session_lifecycle_parallel.go). It shares Get's validation and error
+// contract, like CurrentClaimBeadID.
+func (s *Store) TriggerBeadID(id string) (string, error) {
+	b, err := s.validatedBead(id)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(b.Metadata[beadmeta.TriggerBeadIDMetadataKey]), nil
+}
+
 // CloseWithoutReason closes the session bead identified by id without stamping
 // terminal close metadata. It is the front door for the raw store.Close(id)
 // call in closeBead, which stamps ClosePatch via setMetaBatch separately and

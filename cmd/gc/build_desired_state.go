@@ -3822,13 +3822,18 @@ func resolveTemplateForSessionBeadInfo(
 		// controller does not choose the bead — but a seat that drains no_work
 		// is worth telling apart from one started for any other reason, which is
 		// what the divergence diagnostics key on (demand_divergence.go).
+		//
+		// The marker is deliberately NOT id-bearing. A presence-only fact needs
+		// no bead id, and exporting a real, resolvable, FOREIGN bead id into the
+		// seat's shell made the trigger indistinguishable from a close target:
+		// the documented close idiom "${GC_BEAD_ID:-${GC_TRIGGER_BEAD_ID:-…}}"
+		// would resolve to the controller's stale demand hint and close somebody
+		// else's bead. The trigger id stays on the SESSION BEAD
+		// (gc.trigger_bead_id) where every legitimate consumer already reads it
+		// — the idle-claim backstop (idle_nudge.go) and the divergence
+		// classifier (demand_divergence.go) — and the seat's shell has exactly
+		// one authoritative answer for "what am I running": gc hook current.
 		tp.Env["GC_SPAWN_ORIGIN"] = "demand"
-		tp.Env["GC_TRIGGER_BEAD_ID"] = triggerID
-		tp.Env["GC_TRIGGER_WORK_BEAD_ID"] = triggerID
-		if storeRef := strings.TrimSpace(info.TriggerBeadStoreRef); storeRef != "" {
-			tp.Env["GC_TRIGGER_BEAD_STORE_REF"] = storeRef
-			tp.Env["GC_TRIGGER_WORK_STORE_REF"] = storeRef
-		}
 		if pack := strings.TrimSpace(info.Pack); pack != "" {
 			tp.Env["GC_PACKER_PACK"] = pack
 		}
