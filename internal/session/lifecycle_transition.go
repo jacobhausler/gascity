@@ -98,6 +98,10 @@ var freshWakeConversationResetKeys = []string{
 // ResetCommittedAtKey records when a restart handoff durably committed.
 const ResetCommittedAtKey = "reset_committed_at"
 
+// DrainAckStrandedAtKey records when a session acknowledged its own drain while
+// still holding an open/in-progress assigned work bead. See Info.DrainAckStrandedAt.
+const DrainAckStrandedAtKey = "drain_ack_stranded_at"
+
 // MetadataPatch is an atomic set of metadata key updates for one lifecycle
 // transition. Empty values intentionally clear metadata keys in existing store
 // implementations.

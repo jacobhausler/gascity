@@ -684,6 +684,19 @@ func finalizeDrainAckStoppedSession(
 	if hasAssignedWork {
 		batch = sessionpkg.CompleteDrainPatch(clk.Now().UTC(), string(sessionpkg.SleepReasonIdle), info.WakeMode == "fresh")
 	}
+	// Durably mark (or clear) the stranded-holder fact alongside the sleep the
+	// same patch writes. session.drain_acked_with_assigned_work already reports
+	// this moment, but an event is not queryable state and the patch above is an
+	// ordinary idle sleep — so on the bead a stranded holder is indistinguishable
+	// from a seat that merely went idle. The orphan-release lane needs that
+	// distinction to tell a live claimant from a seat that acknowledged its own
+	// exit while holding the claim (see releaseOrphanedPoolAssignments). Nothing
+	// about the work bead changes here: recovery stays out of the drain-ack path.
+	if hasAssignedWork {
+		batch[sessionpkg.DrainAckStrandedAtKey] = clk.Now().UTC().Format(time.RFC3339)
+	} else {
+		batch[sessionpkg.DrainAckStrandedAtKey] = ""
+	}
 	// A drain-ack that completes a restart-request cycle (gc session reset →
 	// agent drain-ack) must also consume restart_requested. The drain-ack
 	// branch handles the stop and continues before the restart-requested

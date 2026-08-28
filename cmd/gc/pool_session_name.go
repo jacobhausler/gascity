@@ -132,6 +132,44 @@ func GCSweepSessionBeads(cityPath string, store beads.Store, rigStores map[strin
 	return closed
 }
 
+// exitedDrainAckHolderIdentities collects every assignment identity belonging to
+// a fungible seat that acknowledged its own drain while still holding assigned
+// work (drain_ack_stranded_at, written by finalizeDrainAckStoppedSession).
+//
+// Such a seat is not a live claimant even though its session bead is open: a
+// drain-ack is the agent declaring its own exit, and the controller then offers
+// the claim no path back to execution — compute_awake_set's scaled-agent loop
+// skips sessions holding assigned work when choosing wake targets while
+// countAssignedScaleSlots counts them as filled demand slots (so neither this
+// seat nor a replacement is woken), and reusablePoolSessionInfo refuses to
+// wake-reuse a one_shot identity that still holds assigned work. Without this,
+// the three liveness gates in releaseOrphanedPoolAssignments read the asleep
+// holder as alive and the step stays in_progress forever.
+//
+// The gate is SupportsGenericEphemeralSessions — the same fungibility test the
+// reopen lane already applies to the work bead's own template. A named, manual,
+// or singleton session is excluded: it legitimately returns to its own claim.
+func exitedDrainAckHolderIdentities(cfg *config.City, openSessionInfos []session.Info) map[string]struct{} {
+	exited := make(map[string]struct{})
+	for _, info := range openSessionInfos {
+		if info.Closed || strings.TrimSpace(info.DrainAckStrandedAt) == "" {
+			continue
+		}
+		if info.ConfiguredNamedIdentity != "" || info.ConfiguredNamedSession || info.ManualSession {
+			continue
+		}
+		if !findAgentByTemplate(cfg, info.Template).SupportsGenericEphemeralSessions() {
+			continue
+		}
+		for _, id := range sessionBeadAssigneeIdentitiesInfo(info) {
+			if id = strings.TrimSpace(id); id != "" {
+				exited[id] = struct{}{}
+			}
+		}
+	}
+	return exited
+}
+
 // releaseOrphanedPoolAssignmentsWhenSnapshotsComplete skips orphan release
 // unless both the assigned-work and open-session snapshots are complete.
 func releaseOrphanedPoolAssignmentsWhenSnapshotsComplete(
@@ -206,6 +244,7 @@ func releaseOrphanedPoolAssignments(
 			legacyOpenIdentifiers[id] = struct{}{}
 		}
 	}
+	exitedHolders := exitedDrainAckHolderIdentities(cfg, openSessionInfos)
 
 	var released []releasedPoolAssignment
 	for i, wb := range assignedWorkBeads {
@@ -232,6 +271,19 @@ func releaseOrphanedPoolAssignments(
 			if wb.Status != "in_progress" {
 				continue
 			}
+		} else if _, exited := exitedHolders[assignee]; exited {
+			// The assignee is a fungible seat that acknowledged its own drain
+			// while still holding this claim. Its session bead is open and
+			// asleep, so all three liveness gates below would read it as a live
+			// claimant — but nothing will ever run this claim again: the awake
+			// set skips assigned-work holders when choosing wake targets (and
+			// counts them as filled demand slots, suppressing a replacement),
+			// and reusablePoolSessionInfo refuses to wake-reuse a one_shot
+			// identity that still holds assigned work. Fall through to the
+			// release below, which still re-validates the claim
+			// (liveWorkAssignmentStillReleasable + the detached probe) and emits
+			// bead.dead_assignee_reopened.
+			_ = assignee
 		} else {
 			workStoreRef := ""
 			if storeRefAware {
