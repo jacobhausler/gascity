@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/beadclose"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/beads/closeorder"
@@ -585,6 +586,13 @@ func orderedOpenWorkflowSubtree(store beads.Store, rootID string, exclude func(b
 			continue
 		}
 		if exclude != nil && exclude(bead) {
+			continue
+		}
+		if !beadclose.MechanicalCloseAllowed(bead) {
+			// Fail-closed invariant: a mechanical workflow-subtree close must
+			// never contradict a bead's own typed work record. See
+			// internal/beadclose for the cache-reconcile false-close defect
+			// this guards against.
 			continue
 		}
 		ids = append(ids, bead.ID)
