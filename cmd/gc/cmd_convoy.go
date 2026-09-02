@@ -12,6 +12,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/beadclose"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
@@ -1951,6 +1952,23 @@ func autocloseConvoyIfComplete(store beads.Store, rec events.Recorder, convoy be
 	}
 	for _, ch := range children {
 		if !convoycore.IsTerminalStatus(ch.Status) {
+			return
+		}
+	}
+
+	// Fail-closed invariant: a mechanical convoy autoclose must never
+	// contradict the convoy bead's own typed work record. All children being
+	// terminal (closed/tombstone) is a status fact, not a verified-complete
+	// signal — the convoy bead itself, or one of the beads it tracks under a
+	// same identity (a convoy that IS the work item), can carry
+	// gc.work_outcome=blocked/abandoned or a failed gc.work_verification. See
+	// internal/beadclose for the cache-reconcile false-close defect this
+	// guards against.
+	if !beadclose.MechanicalCloseAllowed(convoy) {
+		return
+	}
+	for _, ch := range children {
+		if !beadclose.MechanicalCloseAllowed(ch) {
 			return
 		}
 	}

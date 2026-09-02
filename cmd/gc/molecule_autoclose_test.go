@@ -53,6 +53,37 @@ func TestMoleculeAutocloseClosesRootWhenAllStepsClosed(t *testing.T) {
 	}
 }
 
+// TestMoleculeAutocloseRefusesRootCarryingBlockedWorkOutcome guards the
+// announceClosedMolecule fail-closed invariant: a root whose own typed work
+// record says the acceptance was never met (gc.work_outcome=blocked,
+// gc.work_verification=BLOCKED — the exact shape of the cache-reconcile
+// false-close incident, evidence bead cr-h2e3d) must not be mechanically
+// autoclosed just because every step child happened to reach a terminal
+// status. This is the graph.v2 shape autocloseRootsForSourceBead reaches:
+// a root can be issue_type "task", not "molecule", and still carry a typed
+// work record.
+func TestMoleculeAutocloseRefusesRootCarryingBlockedWorkOutcome(t *testing.T) {
+	store := beads.NewMemStore()
+	root, _ := store.Create(beads.Bead{
+		Title: "mol-blocked",
+		Type:  "molecule",
+		Metadata: map[string]string{
+			beadmeta.WorkOutcomeMetadataKey:      beadmeta.WorkOutcomeBlocked,
+			beadmeta.WorkVerificationMetadataKey: "BLOCKED: acceptance unmet",
+		},
+	})
+	step, _ := store.Create(beads.Bead{Title: "only step", Type: "step", ParentID: root.ID})
+	_ = store.Close(step.ID)
+
+	var out bytes.Buffer
+	doMoleculeAutocloseWith(store, "", events.Discard, step.ID, &out, beads.GraphStore{Store: store})
+
+	r, _ := store.Get(root.ID)
+	if r.Status == "closed" {
+		t.Fatalf("root force-closed despite gc.work_outcome=blocked: status=%q out=%q", r.Status, out.String())
+	}
+}
+
 // TestMoleculeAutocloseIgnoresNonStepCloses asserts the hook only
 // reacts to closes of type="step" — a "task" bead attached to a
 // molecule represents real work the user may close independently of

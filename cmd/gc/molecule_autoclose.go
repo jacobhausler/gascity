@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/beadclose"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	convoycore "github.com/gastownhall/gascity/internal/convoy"
@@ -251,6 +252,17 @@ func subtreeTerminalExcludingRoot(store beads.Store, rootID string) (terminal bo
 // by the step-terminal and source-bead-close triggers. Best-effort: a close
 // failure aborts silently without recording or announcing.
 func announceClosedMolecule(store beads.Store, rec events.Recorder, mol beads.Bead, reason string, stdout io.Writer) bool {
+	// Fail-closed invariant: a mechanical molecule/workflow-root autoclose
+	// must never contradict the root bead's own typed work record —
+	// e.g. a source-bead-triggered close (autocloseRootsForSourceBead) whose
+	// root also carries gc.work_outcome=blocked/abandoned or a failed
+	// gc.work_verification from being slung directly against a work bead.
+	// See internal/beadclose for the cache-reconcile false-close defect this
+	// guards against.
+	if !beadclose.MechanicalCloseAllowed(mol) {
+		return false
+	}
+
 	// Capture the pre-close status before closeMoleculeWithReason transitions
 	// the root to closed — it is the from_status of the resolution record.
 	fromStatus := mol.Status

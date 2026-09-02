@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
 	"github.com/gastownhall/gascity/internal/events"
@@ -1373,6 +1374,55 @@ func TestConvoyAutocloseHappyPath(t *testing.T) {
 	}
 }
 
+// TestConvoyAutocloseRefusesWhenAChildIsBlockedWork reproduces the
+// cache-reconcile false-close defect at the convoy-autoclose entry point: an
+// unrelated child closing (here gc-3, mirroring the "probe bead" cr-ib64v in
+// the incident) must not sweep the convoy closed when a sibling child (gc-2,
+// mirroring the source bead cr-h2e3d) is only status-terminal — closed — but
+// its own typed work record says the acceptance was never met
+// (gc.work_outcome=blocked, gc.work_verification=BLOCKED). Before the
+// beadclose.MechanicalCloseAllowed guard, "all children terminal" (a status
+// check only) was sufficient to autoclose the convoy regardless of what any
+// child's work record actually said.
+func TestConvoyAutocloseRefusesWhenAChildIsBlockedWork(t *testing.T) {
+	store := beads.NewMemStore()
+	_, _ = store.Create(beads.Bead{Title: "batch", Type: "convoy"}) // gc-1
+	_, _ = store.Create(beads.Bead{
+		Title:    "source work (blocked)",
+		Type:     "task",
+		ParentID: "gc-1",
+		Metadata: map[string]string{
+			beadmeta.WorkOutcomeMetadataKey:      beadmeta.WorkOutcomeBlocked,
+			beadmeta.WorkVerificationMetadataKey: "BLOCKED: acceptance unmet",
+		},
+	}) // gc-2
+	_, _ = store.Create(beads.Bead{Title: "probe", Type: "task", ParentID: "gc-1"}) // gc-3
+	if err := store.SetMetadata("gc-2", "close_reason", "worker reported blocked"); err != nil {
+		t.Fatalf("SetMetadata: %v", err)
+	}
+	_ = store.Close("gc-2")
+	_ = store.Close("gc-3")
+
+	var stdout bytes.Buffer
+	doConvoyAutocloseWith(store, events.Discard, "gc-3", &stdout, &bytes.Buffer{})
+
+	if strings.Contains(stdout.String(), "Auto-closed convoy") {
+		t.Errorf("convoy with a blocked-work child should NOT be auto-closed: stdout=%q", stdout.String())
+	}
+	b, err := store.Get("gc-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Status == "closed" {
+		t.Errorf("convoy gc-1 was force-closed despite gc-2 carrying gc.work_outcome=blocked")
+	}
+}
+
+// TestConvoyAutocloseTracksDeps is the companion happy-path proof that the
+// guard added for TestConvoyAutocloseRefusesWhenAChildIsBlockedWork does not
+// turn convoy autoclose into a no-op: children with no typed work-record
+// metadata (the overwhelming majority — see TestConvoyAutocloseHappyPath
+// above) still autoclose their convoy through the same path.
 func TestConvoyAutocloseTracksDeps(t *testing.T) {
 	store := beads.NewMemStore()
 	_, _ = store.Create(beads.Bead{Title: "epic", Type: "epic"})       // gc-1

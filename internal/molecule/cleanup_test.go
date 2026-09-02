@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
@@ -373,5 +374,90 @@ func TestCloseSubtree_StampsCloseReason(t *testing.T) {
 		if got := bead.Metadata["close_reason"]; got != SubtreeClosedReason {
 			t.Errorf("%s close_reason = %q, want %q", id, got, SubtreeClosedReason)
 		}
+	}
+}
+
+// TestCloseSubtreeRefusesToForceCloseABlockedWorkBead reproduces the
+// cache-reconcile false-close defect (gastownhall/gascity, evidence bead
+// cr-h2e3d): a mechanical subtree close (CloseSubtree, the same primitive
+// wisp autoclose's closeAttachedWispSubtree uses to reap an attached
+// molecule/workflow when an unrelated tracked bead closes) must never
+// force-close a descendant task bead whose own typed work record says the
+// acceptance was never met. Before the beadclose.MechanicalCloseAllowed
+// guard, CloseSubtree closed every open descendant unconditionally,
+// regardless of gc.work_outcome/gc.work_verification — so a legitimately
+// blocked work bead swept into someone else's cascade got stamped "closed"
+// with a generic reason and had to be manually reopened.
+func TestCloseSubtreeRefusesToForceCloseABlockedWorkBead(t *testing.T) {
+	store := beads.NewMemStore()
+	root, err := store.Create(beads.Bead{Title: "root", Type: "molecule"})
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	blockedWork, err := store.Create(beads.Bead{
+		Title:    "blocked work",
+		Type:     "task",
+		ParentID: root.ID,
+		Metadata: map[string]string{
+			beadmeta.WorkOutcomeMetadataKey:      beadmeta.WorkOutcomeBlocked,
+			beadmeta.WorkVerificationMetadataKey: "BLOCKED: acceptance unmet",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create blocked work bead: %v", err)
+	}
+
+	if _, err := CloseSubtree(store, root.ID); err != nil {
+		t.Fatalf("CloseSubtree: %v", err)
+	}
+
+	got, err := store.Get(blockedWork.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", blockedWork.ID, err)
+	}
+	if got.Status == "closed" {
+		t.Fatalf("CloseSubtree force-closed blocked work bead %s (work_outcome=%q, work_verification=%q); it must stay open for human review",
+			got.ID, got.Metadata[beadmeta.WorkOutcomeMetadataKey], got.Metadata[beadmeta.WorkVerificationMetadataKey])
+	}
+}
+
+// TestCloseSubtreeStillClosesLegitimatelyPassedWork is the companion to
+// TestCloseSubtreeRefusesToForceCloseABlockedWorkBead: the guard must not
+// turn CloseSubtree into a no-op for the common case. A descendant task bead
+// whose typed work record is a genuine terminal PASS (shipped + a passing
+// verification) still closes through the same mechanical path.
+func TestCloseSubtreeStillClosesLegitimatelyPassedWork(t *testing.T) {
+	store := beads.NewMemStore()
+	root, err := store.Create(beads.Bead{Title: "root", Type: "molecule"})
+	if err != nil {
+		t.Fatalf("create root: %v", err)
+	}
+	shippedWork, err := store.Create(beads.Bead{
+		Title:    "shipped work",
+		Type:     "task",
+		ParentID: root.ID,
+		Metadata: map[string]string{
+			beadmeta.WorkOutcomeMetadataKey:      beadmeta.WorkOutcomeShipped,
+			beadmeta.WorkVerificationMetadataKey: "PASS: gate green",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create shipped work bead: %v", err)
+	}
+
+	closed, err := CloseSubtree(store, root.ID)
+	if err != nil {
+		t.Fatalf("CloseSubtree: %v", err)
+	}
+	if closed != 2 {
+		t.Fatalf("CloseSubtree closed %d beads, want 2 (root + shipped work)", closed)
+	}
+
+	got, err := store.Get(shippedWork.ID)
+	if err != nil {
+		t.Fatalf("Get(%s): %v", shippedWork.ID, err)
+	}
+	if got.Status != "closed" {
+		t.Fatalf("%s status = %q, want closed (a terminal-PASS work bead must still autoclose)", got.ID, got.Status)
 	}
 }
