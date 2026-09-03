@@ -563,6 +563,15 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// Verification close-gate: a close-intent write on a bead that an open
+	// workflow convoy tracks is refused while that workflow's close-gate step
+	// (gc.close_gate=true) is still open, unless the caller IS the gate step.
+	// Enforce by default (GC_VERIFY_GATE_ENFORCE=off downgrades to warn-only);
+	// reuses the store the write-ID guard opened (nil ⇒ fail open).
+	if runVerifyGateCloseGuard(bdArgs, guardStore, stderr) {
+		return 1
+	}
+
 	reapStaleBdExportJSONL(target.ScopeRoot)
 	warnExternalBdOverrideDrift(stderr, cityPath, target)
 

@@ -73,7 +73,16 @@ const (
 	// (*beads.PreconditionFailedError) with no fallback and no partial
 	// effect ever lands. See molecule.ClaimExact's doc for the exact
 	// guarantee this does and does not provide.
-	ClaimGenerationMetadataKey           = "gc.claim_generation"
+	ClaimGenerationMetadataKey = "gc.claim_generation"
+	// CloseGateMetadataKey marks a formula step that holds close authority
+	// over the beads its workflow convoy tracks. It is a marker, not state:
+	// the step is stamped with it by formula metadata (e.g.
+	// mol-verified-work luna-verify) and the gc bd close-intent guard
+	// (cmd/gc/verify_gate_close.go) refuses to close a tracked target while
+	// an open workflow root owns an open step carrying this marker. The
+	// marker is fully opt-in per formula: beads with no close-gate step
+	// anywhere see zero behavior change.
+	CloseGateMetadataKey                 = "gc.close_gate"
 	ClosedByAttemptMetadataKey           = "gc.closed_by_attempt"
 	ContinuationGroupMetadataKey         = "gc.continuation_group"
 	ControlDispatcherFallbackMetadataKey = "gc.control_dispatcher_fallback"
@@ -407,6 +416,7 @@ var KnownMetadataKeys = []string{
 	CityPathMetadataKey,
 	ClaimedAtMetadataKey,
 	ClaimGenerationMetadataKey,
+	CloseGateMetadataKey,
 	ClosedByAttemptMetadataKey,
 	ContinuationGroupMetadataKey,
 	ControlEpochMetadataKey,
