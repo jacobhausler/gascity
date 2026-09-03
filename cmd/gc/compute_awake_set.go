@@ -464,8 +464,11 @@ func ComputeAwakeSet(input AwakeInput) map[string]AwakeDecision {
 		}
 
 		// Durable pin override — wakes and keeps the session awake while
-		// still respecting hard blockers applied below.
-		pinBlockedByState := bead.State == "suspended" || bead.State == "closed" || bead.Drained
+		// still respecting hard blockers applied below. Drained is
+		// deliberately not a hard blocker: a pinned session must self-heal
+		// out of sleep_reason=drained the same way it already self-heals
+		// out of idle/config-drift/max-age sleep. See cr-go3xp / cr-9iavw.
+		pinBlockedByState := bead.State == "suspended" || bead.State == "closed"
 		if !decision.ShouldWake && bead.Pinned && !pinBlockedByState && !bead.DependencyOnly && !bead.WaitHold {
 			if agent, ok := lookupAgent(bead.Template); ok && !agent.Suspended {
 				decision.ShouldWake = true

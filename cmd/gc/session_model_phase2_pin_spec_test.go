@@ -334,14 +334,6 @@ func TestPhase2ComputeAwakeSet_PinRespectsHardBlockers(t *testing.T) {
 				QuarantinedUntil: now.Add(time.Hour),
 			},
 		},
-		{
-			name:   "drained",
-			agents: []AwakeAgent{{QualifiedName: "worker"}},
-			bead: AwakeSessionBead{
-				State:   "asleep",
-				Drained: true,
-			},
-		},
 	}
 
 	for _, tt := range tests {
@@ -356,6 +348,49 @@ func TestPhase2ComputeAwakeSet_PinRespectsHardBlockers(t *testing.T) {
 				Agents:       tt.agents,
 				SessionBeads: []AwakeSessionBead{bead},
 				Now:          now,
+			})
+
+			assertAsleep(t, result, "test-city--worker")
+		})
+	}
+}
+
+func TestPhase2ComputeAwakeSet_PinWakesThroughDrained(t *testing.T) {
+	// A pinned named session that ends up state=asleep/sleep_reason=drained
+	// (e.g. a stalled config-drift respawn, see cr-9iavw/cr-go3xp) must
+	// self-heal the same way it already self-heals out of idle/config-drift/
+	// max-age sleep. Drained is not a hard blocker like suspended/closed.
+	result := ComputeAwakeSet(AwakeInput{
+		Agents: []AwakeAgent{{QualifiedName: "worker"}},
+		SessionBeads: []AwakeSessionBead{{
+			ID:          "mc-1",
+			SessionName: "test-city--worker",
+			Template:    "worker",
+			State:       "asleep",
+			Pinned:      true,
+			Drained:     true,
+		}},
+		Now: now,
+	})
+
+	assertAwake(t, result, "test-city--worker")
+	assertReason(t, result, "test-city--worker", "pin")
+}
+
+func TestPhase2ComputeAwakeSet_PinRespectsSuspendedAndClosedEvenIfDrained(t *testing.T) {
+	for _, state := range []string{"suspended", "closed"} {
+		t.Run(state, func(t *testing.T) {
+			result := ComputeAwakeSet(AwakeInput{
+				Agents: []AwakeAgent{{QualifiedName: "worker"}},
+				SessionBeads: []AwakeSessionBead{{
+					ID:          "mc-1",
+					SessionName: "test-city--worker",
+					Template:    "worker",
+					State:       state,
+					Pinned:      true,
+					Drained:     true,
+				}},
+				Now: now,
 			})
 
 			assertAsleep(t, result, "test-city--worker")

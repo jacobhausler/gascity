@@ -984,7 +984,10 @@ func TestScaleDemandCountsAssignedSessionBeforeKeepingStartPendingPoolSibling(t 
 	assertReason(t, result, "gc__run-operator-mc-new", "assigned-work")
 }
 
-func TestDrained_PinnedStaysAsleepUntilUndrained(t *testing.T) {
+func TestDrained_PinnedWakesThroughDrainedViaPinOverride(t *testing.T) {
+	// A pinned session must self-heal out of sleep_reason=drained the same
+	// way it already self-heals out of idle/config-drift/max-age sleep.
+	// See cr-go3xp / cr-9iavw.
 	result := ComputeAwakeSet(AwakeInput{
 		Agents: []AwakeAgent{{QualifiedName: "hello-world/polecat"}},
 		SessionBeads: []AwakeSessionBead{
@@ -992,7 +995,8 @@ func TestDrained_PinnedStaysAsleepUntilUndrained(t *testing.T) {
 		},
 		Now: now,
 	})
-	assertAsleep(t, result, "polecat-mc-1")
+	assertAwake(t, result, "polecat-mc-1")
+	assertReason(t, result, "polecat-mc-1", "pin")
 }
 
 // TestDrained_ResetPendingStaysAsleep reproduces the wake/drain oscillation
