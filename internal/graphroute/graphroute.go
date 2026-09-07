@@ -52,6 +52,13 @@ type GraphRouteBinding struct {
 	DirectSessionID string
 	RigContext      string
 	MetadataOnly    bool
+	// IndependentSteps marks a pool route whose target runtime exits after one
+	// bounded invocation. One-shot lifecycles cannot own cross-step continuation,
+	// so ApplyGraphRouteBinding clears the pinned continuation/affinity pair for
+	// these routes even when the formula opted in: pinning later steps to the slot
+	// that claimed the first one would strand them on a session that no longer
+	// exists (#5584).
+	IndependentSteps bool
 	// ContinuationGroup is the formula-declared continuation group for a
 	// pool-routed (MetadataOnly) step, captured from the authored recipe
 	// metadata at decoration time. It is the immutable source of the pool
@@ -208,7 +215,15 @@ func ApplyGraphRouteBinding(step *formula.RecipeStep, binding GraphRouteBinding)
 		// and affinity together (the pinned pair, per
 		// beadmeta.SessionAffinityMetadataKeys) so no stale group survives to
 		// mis-vacuum later pool claims.
-		if group := strings.TrimSpace(binding.ContinuationGroup); group != "" {
+		if binding.IndependentSteps {
+			// One-shot lifecycle overrides the formula's opt-in: no runtime survives
+			// this invocation to carry a continuation group into the next step, so
+			// the pinned pair is cleared rather than honoured and every executable
+			// step stays claimable by a fresh pool slot (#5584).
+			for _, key := range beadmeta.SessionAffinityMetadataKeys {
+				delete(step.Metadata, key)
+			}
+		} else if group := strings.TrimSpace(binding.ContinuationGroup); group != "" {
 			step.Metadata[beadmeta.ContinuationGroupMetadataKey] = group
 			step.Metadata[beadmeta.SessionAffinityMetadataKey] = "require"
 		} else {
@@ -226,6 +241,19 @@ func ApplyGraphRouteBinding(step *formula.RecipeStep, binding GraphRouteBinding)
 		step.Metadata[beadmeta.SessionNameMetadataKey] = binding.SessionName
 	}
 	step.Assignee = binding.SessionName
+}
+
+// GraphRouteBindingForAgent derives the config-backed routing behavior for an
+// agent. Pool routes stay metadata-only; one-shot pools additionally make each
+// graph step an independent claim because no runtime survives to carry session
+// affinity into the next step (#5584).
+func GraphRouteBindingForAgent(agentCfg config.Agent) GraphRouteBinding {
+	binding := GraphRouteBinding{QualifiedName: agentutil.RoutedToIdentity(&agentCfg)}
+	if agentCfg.SupportsInstanceExpansion() {
+		binding.MetadataOnly = true
+		binding.IndependentSteps = agentCfg.Lifecycle == config.AgentLifecycleOneShot
+	}
+	return binding
 }
 
 // ApplyGraphControlRouteBinding routes control steps to the store-scoped
@@ -453,9 +481,8 @@ func ResolveGraphStepBindingWithVars(stepID string, stepByID map[string]*formula
 	if !ok {
 		return GraphRouteBinding{}, fmt.Errorf("step %s: unknown formulas v2 target %q", stepID, target.value)
 	}
-	binding := GraphRouteBinding{QualifiedName: agentutil.RoutedToIdentity(&agentCfg)}
-	if agentCfg.SupportsInstanceExpansion() {
-		binding.MetadataOnly = true
+	binding := GraphRouteBindingForAgent(agentCfg)
+	if binding.MetadataOnly {
 		cache[stepID] = binding
 		return binding, nil
 	}
@@ -661,29 +688,38 @@ func ApplyGraphRouting(recipe *formula.Recipe, a *config.Agent, routedTo string,
 	// Resolve agent if not provided (order dispatch path).
 	if a == nil {
 		rigContext := GraphRouteRigContext(routedTo)
-		baseName := routedTo
-		if i := strings.LastIndex(routedTo, "/"); i >= 0 {
-			baseName = routedTo[i+1:]
-		}
 		if deps.Resolver == nil {
 			return nil
 		}
-		resolved, ok := deps.Resolver.ResolveAgent(cfg, baseName, rigContext)
+		// Pass the fully qualified routedTo rather than a rig-prefix-stripped
+		// bare name. Stripping the prefix here and relying on the resolver to
+		// reconstruct it from rigContext alone loses information for a resolver
+		// that matches only on the qualified identity, so a rig-scoped one-shot
+		// target such as "rig1/oneshot" fails resolution and falls through the
+		// !ok early return below: gc.routed_to is never stamped and the stale
+		// gc.continuation_group/gc.session_affinity pair is left to park the
+		// step on a session that will not exist (#5586). Bare (unscoped)
+		// targets are unaffected, since routedTo == baseName for them.
+		resolved, ok := deps.Resolver.ResolveAgent(cfg, routedTo, rigContext)
 		if !ok {
 			return nil
 		}
 		a = &resolved
 	}
 
-	var sessionName string
-	if !a.SupportsInstanceExpansion() {
-		sessionName = agentutil.LookupSessionName(store, cityName, a.QualifiedName(), cfg.Workspace.SessionTemplate)
-		if sessionName == "" {
+	defaultRoute := GraphRouteBindingForAgent(*a)
+	// routedTo is the caller's already-normalized persisted identity; keep it
+	// rather than recomputing in case the caller resolved a compatibility
+	// spelling that agentutil intentionally keeps stable on the wire.
+	defaultRoute.QualifiedName = routedTo
+	if !defaultRoute.MetadataOnly {
+		defaultRoute.SessionName = agentutil.LookupSessionName(store, cityName, a.QualifiedName(), cfg.Workspace.SessionTemplate)
+		if defaultRoute.SessionName == "" {
 			return fmt.Errorf("could not resolve session name for %q", a.QualifiedName())
 		}
 	}
 	routeVars := GraphWorkflowRouteVars(recipe, vars)
-	return DecorateGraphWorkflowRecipe(recipe, routeVars, sourceBeadID, scopeKind, scopeRef, storeRef, routedTo, sessionName, store, cityName, cfg, deps)
+	return DecorateGraphWorkflowRecipeWithDefaultBinding(recipe, routeVars, sourceBeadID, scopeKind, scopeRef, storeRef, defaultRoute, store, cityName, cfg, deps)
 }
 
 // stampLegacyRecipeRouting mirrors the graph.v2 path in ApplyGraphRouteBinding:
