@@ -149,8 +149,20 @@ func GCSweepSessionBeads(cityPath string, store beads.Store, rigStores map[strin
 // The gate is SupportsGenericEphemeralSessions — the same fungibility test the
 // reopen lane already applies to the work bead's own template. A named, manual,
 // or singleton session is excluded: it legitimately returns to its own claim.
-func exitedDrainAckHolderIdentities(cfg *config.City, openSessionInfos []session.Info) map[string]struct{} {
-	exited := make(map[string]struct{})
+//
+// The result is store-ref qualified exactly like makeOpenSessionStoreRefIndex,
+// because pool seat identities recur across rig stores (#3453): a stranded seat
+// must only ever disqualify the claims in the stores IT can reach, never a
+// same-named live seat's claim in another store. The legacy bare-identity set is
+// the pre-store-ref fallback, returned for the !storeRefAware callers.
+func exitedDrainAckHolderIdentities(cityPath string, cfg *config.City, leading beads.Store, openSessionInfos []session.Info, storeRefAware bool) (map[string]map[string]struct{}, map[string]struct{}) {
+	scoped := make(map[string]map[string]struct{})
+	legacy := make(map[string]struct{})
+	var claimRefs []string
+	if storeRefAware {
+		// A property of the CITY, so it is resolved once rather than per session.
+		claimRefs = assignedWorkClaimRefs(cityPath, cfg, leading)
+	}
 	for _, info := range openSessionInfos {
 		if info.Closed || strings.TrimSpace(info.DrainAckStrandedAt) == "" {
 			continue
@@ -173,13 +185,48 @@ func exitedDrainAckHolderIdentities(cfg *config.City, openSessionInfos []session
 		if !findAgentByTemplate(cfg, info.Template).SupportsGenericEphemeralSessions() {
 			continue
 		}
+		var storeRefs []string
+		if storeRefAware {
+			storeRefs = openSessionReachableStoreRefInfo(cityPath, cfg, claimRefs, info)
+		}
 		for _, id := range sessionBeadAssigneeIdentitiesInfo(info) {
-			if id = strings.TrimSpace(id); id != "" {
-				exited[id] = struct{}{}
+			if id = strings.TrimSpace(id); id == "" {
+				continue
+			}
+			legacy[id] = struct{}{}
+			for _, storeRef := range storeRefs {
+				addOpenSessionStoreRef(scoped, id, storeRef)
 			}
 		}
 	}
-	return exited
+	return scoped, legacy
+}
+
+// exitedDrainAckHolderOwnsWork reports whether the work bead in workStoreRef is
+// held by a stranded drain-ack seat. It is the fail-CLOSED inverse of
+// openSessionOwnsWork: there, an unresolved or cross-store reachability answer
+// means "assume the session owns the work" because the destructive direction is
+// releasing a live claim. Here the answer drives a release, so the same
+// ambiguity must mean "not stranded" and leave the claim alone. Only an exact
+// store-ref hit — this seat demonstrably reaches the store the claim lives in —
+// bypasses the liveness gate.
+func exitedDrainAckHolderOwnsWork(scoped map[string]map[string]struct{}, legacy map[string]struct{}, assignee, workStoreRef string, storeRefAware bool) bool {
+	if !storeRefAware {
+		_, ok := legacy[assignee]
+		return ok
+	}
+	refs := scoped[assignee]
+	if refs == nil {
+		return false
+	}
+	if _, ok := refs[unresolvedOpenSessionStoreRef]; ok {
+		return false
+	}
+	if _, ok := refs[crossStoreOpenSessionStoreRef]; ok {
+		return false
+	}
+	_, ok := refs[workStoreRef]
+	return ok
 }
 
 // releaseOrphanedPoolAssignmentsWhenSnapshotsComplete skips orphan release
@@ -256,7 +303,7 @@ func releaseOrphanedPoolAssignments(
 			legacyOpenIdentifiers[id] = struct{}{}
 		}
 	}
-	exitedHolders := exitedDrainAckHolderIdentities(cfg, openSessionInfos)
+	exitedHolders, legacyExitedHolders := exitedDrainAckHolderIdentities(cityPath, cfg, store, openSessionInfos, storeRefAware)
 
 	var released []releasedPoolAssignment
 	for i, wb := range assignedWorkBeads {
@@ -279,11 +326,15 @@ func releaseOrphanedPoolAssignments(
 		// probe below reads the same store; the missing-store report stays where
 		// it was, so a bead skipped by a liveness gate never reaches it.
 		ownerStore := assignedWorkOwnerStore(cfg, store, rigStores, assignedWorkStores, i, wb)
+		workStoreRef := ""
+		if storeRefAware {
+			workStoreRef = assignedWorkStoreRefs[i]
+		}
 		if assignee == "" {
 			if wb.Status != "in_progress" {
 				continue
 			}
-		} else if _, exited := exitedHolders[assignee]; exited {
+		} else if exitedDrainAckHolderOwnsWork(exitedHolders, legacyExitedHolders, assignee, workStoreRef, storeRefAware) {
 			// The assignee is a fungible seat that acknowledged its own drain
 			// while still holding this claim. Its session bead is open and
 			// asleep, so all three liveness gates below would read it as a live
@@ -295,11 +346,15 @@ func releaseOrphanedPoolAssignments(
 			// release below, which still re-validates the claim
 			// (liveWorkAssignmentStillReleasable + the detached probe) and emits
 			// bead.dead_assignee_reopened.
-		} else {
-			workStoreRef := ""
-			if storeRefAware {
-				workStoreRef = assignedWorkStoreRefs[i]
+			// Only the seat's OWN liveness gates are bypassed. The named-session
+			// route guard still runs: the exclusions above filter the session
+			// carrying the marker, not the assignee string, and a named or
+			// graph-run route that happens to collide on that string must keep
+			// its claim.
+			if assigneePreservesNamedSessionRoute(cfg, cityPath, template, assignee, workStoreRef, storeRefAware) {
+				continue
 			}
+		} else {
 			if openSessionOwnsWork(legacyOpenIdentifiers, openIdentifiers, assignee, workStoreRef, storeRefAware) {
 				continue
 			}
