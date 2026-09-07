@@ -155,6 +155,18 @@ func exitedDrainAckHolderIdentities(cfg *config.City, openSessionInfos []session
 		if info.Closed || strings.TrimSpace(info.DrainAckStrandedAt) == "" {
 			continue
 		}
+		// Belt and braces with the PreWakePatch clear: only an ASLEEP seat is
+		// stranded. The marker is written by the drain-ack finalize alongside
+		// CompleteDrainPatch (state=asleep), and PreWakePatch clears it on the
+		// next start — but a marker that somehow survived a restart, an
+		// out-of-band metadata write, or a start path that does not route
+		// through PreWakePatch must never make a live/creating seat look dead.
+		// Raw MetadataState is the read here (not the liveness-shaped
+		// Info.State) for the same reason the drained/known-state classifiers
+		// use it: it is the durable persisted value.
+		if strings.TrimSpace(info.MetadataState) != string(session.StateAsleep) {
+			continue
+		}
 		if info.ConfiguredNamedIdentity != "" || info.ConfiguredNamedSession || info.ManualSession {
 			continue
 		}
@@ -283,7 +295,6 @@ func releaseOrphanedPoolAssignments(
 			// release below, which still re-validates the claim
 			// (liveWorkAssignmentStillReleasable + the detached probe) and emits
 			// bead.dead_assignee_reopened.
-			_ = assignee
 		} else {
 			workStoreRef := ""
 			if storeRefAware {

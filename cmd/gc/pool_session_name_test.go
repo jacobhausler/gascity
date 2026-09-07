@@ -2758,3 +2758,62 @@ func TestReleaseOrphanedPoolAssignments_SkipsIdleAsleepHolderWithoutStrandedMark
 		t.Fatalf("released = %v, want none — an idle-asleep holder is still wakeable", released)
 	}
 }
+
+// TestReleaseOrphanedPoolAssignments_SkipsStrandedMarkerOnNonAsleepHolder pins
+// the state gate that pairs with PreWakePatch's clear of the marker. Only an
+// ASLEEP seat is stranded: the marker is written alongside CompleteDrainPatch
+// (state=asleep) and cleared again on the next start. A marker that survived a
+// path that does not route through PreWakePatch — or an out-of-band metadata
+// write — must never make a live/creating seat read as dead and get its claim
+// reopened underneath it.
+func TestReleaseOrphanedPoolAssignments_SkipsStrandedMarkerOnNonAsleepHolder(t *testing.T) {
+	for _, state := range []string{"active", "creating", "start_pending"} {
+		t.Run(state, func(t *testing.T) {
+			store := beads.NewMemStore()
+			sessionBead, err := store.Create(beads.Bead{
+				Title:  "worker-1",
+				Type:   sessionBeadType,
+				Status: "open",
+				Labels: []string{sessionBeadLabel},
+				Metadata: map[string]string{
+					"session_name":                "worker-1-pool",
+					"template":                    "worker",
+					"state":                       state,
+					session.DrainAckStrandedAtKey: "2026-08-28T17:03:37Z",
+					poolManagedMetadataKey:        boolMetadata(true),
+				},
+			})
+			if err != nil {
+				t.Fatalf("Create session bead: %v", err)
+			}
+			work, err := store.Create(beads.Bead{
+				Title:    "execute-operation",
+				Assignee: "worker-1-pool",
+				Metadata: map[string]string{"gc.routed_to": "worker"},
+			})
+			if err != nil {
+				t.Fatalf("Create work bead: %v", err)
+			}
+			if err := store.Update(work.ID, beads.UpdateOpts{Status: stringPtr("in_progress")}); err != nil {
+				t.Fatalf("Set work status: %v", err)
+			}
+			if work, err = store.Get(work.ID); err != nil {
+				t.Fatalf("Reload work bead: %v", err)
+			}
+
+			released := releaseOrphanedPoolAssignmentsFromBeads(
+				store,
+				&config.City{Agents: []config.Agent{{Name: "worker", MinActiveSessions: intPtr(0), MaxActiveSessions: intPtr(2)}}},
+				"",
+				[]beads.Bead{sessionBead},
+				[]beads.Bead{work},
+				[]beads.Store{store},
+				nil,
+				nil,
+			)
+			if len(released) != 0 {
+				t.Fatalf("released = %v, want none — a %s seat is live, not stranded", released, state)
+			}
+		})
+	}
+}
