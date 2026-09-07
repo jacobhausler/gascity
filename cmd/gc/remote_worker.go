@@ -187,7 +187,7 @@ func remoteHookClaim(client *api.Client, opts hookCommandOptions, stdout, stderr
 	if claimsErrored {
 		reason = hookClaimReasonClaimsErrored
 	}
-	return writeHookClaimDrain(reason, opts.JSON, opts.DrainAck, drainAck, stdout, stderr)
+	return writeHookClaimDrain(hookClaimLabel, reason, opts.JSON, opts.DrainAck, drainAck, stdout, stderr)
 }
 
 // remoteHookCandidates asks the city for the open work this session may claim

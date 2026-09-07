@@ -3,6 +3,7 @@ package session
 import (
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -467,6 +468,92 @@ func TestCurrentClaimRefusesANonSessionBead(t *testing.T) {
 	}
 	if _, err := is.CurrentClaimBeadID("wb-1"); !errors.Is(err, ErrSessionNotFound) {
 		t.Fatalf("CurrentClaimBeadID on a non-session bead = %v, want ErrSessionNotFound", err)
+	}
+}
+
+// TestCurrentClaimCASHasOneWinnerAndConditionalClear proves the session
+// back-channel is a real value-CAS reservation, not a read-then-unconditional
+// write. Two claimants racing from the same empty snapshot leave exactly one
+// pointer; a stale clear cannot erase that winner, while the winner can clear
+// its own pointer with the expected value.
+func TestCurrentClaimCASHasOneWinnerAndConditionalClear(t *testing.T) {
+	b := sessionBeadFixture("s-1", "open", nil)
+	mem := beads.NewMemStoreFrom(1, []beads.Bead{b}, nil)
+	is := NewStore(beads.SessionStore{Store: mem})
+
+	type result struct {
+		id      string
+		outcome beads.MetadataCASOutcome
+		err     error
+	}
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for _, id := range []string{"work-a", "work-b"} {
+		id := id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			outcome, err := is.ReserveCurrentClaim("s-1", "", id)
+			results <- result{id: id, outcome: outcome, err: err}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	winners := 0
+	winner := ""
+	for got := range results {
+		if got.err != nil {
+			t.Fatalf("ReserveCurrentClaim(%s): %v", got.id, got.err)
+		}
+		if got.outcome == beads.MetadataCASSwapped {
+			winners++
+			winner = got.id
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("CAS winners = %d, want exactly one", winners)
+	}
+	current, err := is.CurrentClaimBeadID("s-1")
+	if err != nil {
+		t.Fatalf("CurrentClaimBeadID: %v", err)
+	}
+	if current != winner {
+		t.Fatalf("current claim = %q, want sole winner %q", current, winner)
+	}
+
+	loser := "work-a"
+	if loser == winner {
+		loser = "work-b"
+	}
+	outcome, err := is.ClearCurrentClaim("s-1", loser)
+	if err != nil {
+		t.Fatalf("ClearCurrentClaim(stale): %v", err)
+	}
+	if outcome != beads.MetadataCASConflict {
+		t.Fatalf("stale clear outcome = %q, want conflict", outcome)
+	}
+	current, err = is.CurrentClaimBeadID("s-1")
+	if err != nil {
+		t.Fatalf("CurrentClaimBeadID after stale clear: %v", err)
+	}
+	if current != winner {
+		t.Fatalf("stale clear erased winner: current = %q, want %q", current, winner)
+	}
+
+	outcome, err = is.ClearCurrentClaim("s-1", winner)
+	if err != nil {
+		t.Fatalf("ClearCurrentClaim(winner): %v", err)
+	}
+	if outcome != beads.MetadataCASSwapped {
+		t.Fatalf("winner clear outcome = %q, want swapped", outcome)
+	}
+	current, err = is.CurrentClaimBeadID("s-1")
+	if err != nil {
+		t.Fatalf("CurrentClaimBeadID after winner clear: %v", err)
+	}
+	if current != "" {
+		t.Fatalf("current claim after winner clear = %q, want empty", current)
 	}
 }
 
