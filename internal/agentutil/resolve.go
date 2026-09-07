@@ -30,6 +30,20 @@ type ResolveOpts struct {
 	// AllowPoolMembers enables pool instance synthesis (e.g., "polecat-2"
 	// matching pool "polecat"). Used by dispatch modes (CLI + API sling).
 	AllowPoolMembers bool
+
+	// AllowAgentGroups enables agent-group targets: an input naming a
+	// configured [[agent_groups]] entry resolves to the member its placement
+	// strategy chooses. Used by dispatch modes (CLI + API sling) and left off
+	// everywhere else — a group is a placement decision about work, so it is
+	// never a valid target for creating or addressing a session.
+	//
+	// Defaults false, so every existing caller is unchanged by construction.
+	AllowAgentGroups bool
+
+	// GroupFacts supplies the health facts the group's member-eligibility
+	// filter reads. The zero value is valid and filters on configuration
+	// alone. Only consulted when AllowAgentGroups is set.
+	GroupFacts GroupFacts
 }
 
 // ResolveAgent resolves an agent input string to a config.Agent using
@@ -62,6 +76,16 @@ func ResolveAgent(cfg *config.City, input string, opts ResolveOpts) (config.Agen
 	// "binding.polecat-2" matches the corresponding pool template.
 	if opts.AllowPoolMembers && strings.ContainsAny(input, "/.") {
 		if a, ok := resolvePoolInstanceQualified(cfg, input); ok {
+			return a, true
+		}
+	}
+
+	// Step 2c: agent group — an input naming a configured group resolves to the
+	// member its strategy chooses, as an ordinary config.Agent. Placed AFTER
+	// the literal-agent steps so a configured agent always wins even though
+	// config validation already rejects a group name that collides with one.
+	if opts.AllowAgentGroups {
+		if a, _, ok := ResolveAgentGroupTarget(cfg, input, opts.GroupFacts); ok {
 			return a, true
 		}
 	}

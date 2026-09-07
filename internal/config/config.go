@@ -248,6 +248,15 @@ type City struct {
 	// NamedSessions lists canonical alias-backed sessions built from
 	// reusable agent templates.
 	NamedSessions []NamedSession `toml:"named_session,omitempty"`
+	// AgentGroups declares sets of interchangeable placement members behind one
+	// nameable sling target. A group is resolved to exactly one concrete member
+	// before anything is routed, so gc.routed_to keeps naming a single agent.
+	//
+	// Authored in city.toml only, never composed from packs: membership is a
+	// deployment-level assertion over the agents a particular city configured,
+	// which a shared pack cannot make. Empty (the default) leaves every
+	// agent-group code path inert — see AgentGroupsConfigured.
+	AgentGroups []AgentGroup `toml:"agent_groups,omitempty"`
 	// Rigs lists external projects registered in the city.
 	Rigs []Rig `toml:"rigs,omitempty"`
 	// Patches holds targeted modifications applied after fragment merge.

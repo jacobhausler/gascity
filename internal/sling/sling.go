@@ -68,6 +68,16 @@ type SlingOpts struct {
 	InlineText bool
 	ScopeKind  string
 	ScopeRef   string
+	// AgentGroup and AgentGroupStrategy carry the provenance of a target that
+	// named an agent group: Target is already the concrete member the group's
+	// strategy chose, and these record which group chose it and under which
+	// strategy. Empty for an ordinary target.
+	//
+	// They are stamped alongside gc.routed_to so the controller can re-pick the
+	// member while the bead is still open and unclaimed. Nothing downstream
+	// reads Target differently because of them.
+	AgentGroup         string
+	AgentGroupStrategy string
 }
 
 // AgentResolver resolves an agent name to a config.Agent.
@@ -109,6 +119,10 @@ type RouteRequest struct {
 	WorkDir  string            // rig directory for command execution
 	Env      map[string]string // extra env vars (GC_SLING_TARGET, etc.)
 	Force    bool              // allow best-effort routing when the bead is absent
+	// AgentGroup and AgentGroupStrategy are the agent-group provenance to stamp
+	// beside gc.routed_to. Empty for an ordinary target. See SlingOpts.
+	AgentGroup         string
+	AgentGroupStrategy string
 }
 
 // SlingDeps bundles infrastructure dependencies for sling operations.

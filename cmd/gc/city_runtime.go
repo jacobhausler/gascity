@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/clock"
@@ -2105,6 +2106,12 @@ func (cr *CityRuntime) reloadConfigTraced(
 	}
 
 	if err := config.ValidateRigs(nextCfg.Rigs, config.EffectiveHQPrefix(nextCfg)); err != nil {
+		appendWarning(fmt.Sprintf("config reload: %v", err))
+	}
+	// Same discipline as the rig check above: a reload that introduces a bad
+	// agent group is surfaced as a warning, not a hard failure, so a live city
+	// keeps running on the config it already has.
+	if err := agentutil.ValidateAgentGroups(nextCfg); err != nil {
 		appendWarning(fmt.Sprintf("config reload: %v", err))
 	}
 	for _, w := range config.ReservedPrefixWarnings(nextCfg.Rigs, config.EffectiveHQPrefix(nextCfg)) {

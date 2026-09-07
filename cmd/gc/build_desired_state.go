@@ -840,6 +840,14 @@ func buildDesiredStateWithSessionBeadsAt(
 		// demand is counted below, is what makes the row both countable and
 		// claimable in the same tick instead of neither.
 		collapseSlotSuffixedRoutedWork(cfg, unassignedRoutedBeads, unassignedRoutedStores, stderr)
+		// Same phase, same reason, one step further: a row slung at an agent
+		// group carries the member that was eligible AT SLING TIME. Re-pick the
+		// member here, while the row is still open and unclaimed, so a member
+		// that has since been suspended, capped out, stranded work or lost its
+		// runtime hands the work to the next member — and so the rebound row is
+		// counted as demand for the NEW member in this same tick. Inert unless
+		// the city declares [[agent_groups]].
+		rebindAgentGroupRoutedWork(cityPath, cfg, unassignedRoutedBeads, unassignedRoutedStores, agentGroupRebindFacts(cfg, sessionBeads.OpenInfos()), stderr)
 		repairControlDispatcherRoutesForStoreScope(cityPath, cfg, unassignedRoutedBeads, unassignedRoutedStores, unassignedRoutedStoreRefs, stderr)
 		// canonicalizeLegacyBound* above rewrote gc.routed_to on open ready
 		// work, so the assigned-work snapshot is now stale for demand

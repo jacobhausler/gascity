@@ -261,6 +261,51 @@ or `GC_SESSION=exec:<runtime-pack>` selects one without editing `city.toml`.
 > An agent that never needs interactive attach can set `attach = false` to let gc
 > pick a lighter runtime (subprocess) where the city allows it.
 
+## Agent groups — one sling target, several interchangeable agents
+
+The five axes describe one agent. An **agent group** is a placement primitive
+*over* agents: one nameable sling target fronting several agents you consider
+interchangeable for that group's work.
+
+```toml
+# city.toml
+[[agent_groups]]
+name    = "tools/heavy"
+members = ["tools/reviewer", "tools/reviewer-small"]   # preference order
+strategy = "ordered-failover"                          # the only value today
+
+[agent_groups.health]
+drain_ack_stranded       = true   # default: skip a member stranding work
+require_routable_runtime = true   # default: skip a member whose runtime is undeclared
+```
+
+`gc sling tools/heavy <bead>` then routes to the first *eligible* member —
+falling back down the list when the preferred one is suspended, capped at zero
+sessions, stranding work, or selecting a runtime this binary cannot resolve. A
+member is never skipped merely for being **busy**: routing to a full pool is
+harmless, because the bead waits in that pool's queue.
+
+Three things a group deliberately is not:
+
+- **Not a place to configure an agent.** A group names members; each member
+  carries its own provider, model, upstream, transport and runtime.
+- **Not a route.** The group is resolved to exactly one concrete member *before*
+  anything is written, so `gc.routed_to` always names a single agent — the same
+  value every worker's claim query matches by exact string. The bead also
+  carries `gc.agent_group`, and while it is still open and unclaimed the
+  controller re-picks the member each tick if the current one goes bad.
+- **Not a quality tier.** A group is your assertion that its members can handle
+  the same work. Express tiering by defining two groups with different
+  membership, and sling the work that needs the better tier at the group that
+  only contains it.
+
+Members must be rig-qualified agents in the group's own rig, and the group's
+name must not collide with an agent or a named session; both are checked at
+config load. Declaring `[[agent_groups]]` requires that every gc parsing this
+`city.toml` already runs a group-aware binary — an unknown top-level key is
+fatal to an older one — so cycle binaries first, add the stanza second, and
+remove the stanza before rolling a binary back.
+
 ## Putting it together
 
 A fully-specified agent that runs Claude on Bedrock, in a Kubernetes pod, driven

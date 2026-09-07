@@ -429,6 +429,54 @@
       "type": "object",
       "description": "AgentDefaults provides agent defaults declared via [agent_defaults] in city.toml or pack.toml."
     },
+    "AgentGroup": {
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Name is the group's rig-qualified sling target, e.g. \"myrig/heavy\". It\nmust not collide with a configured agent or named session."
+        },
+        "members": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Members lists the group's placement candidates in preference order, as\nrig-qualified agent identities. Every member must be a configured agent\nin the group's own rig."
+        },
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "ordered-failover"
+          ],
+          "description": "Strategy selects the placement policy. \"\" (default) is\n\"ordered-failover\", which is the only accepted value today; any other\nvalue is rejected at config load."
+        },
+        "health": {
+          "$ref": "#/$defs/AgentGroupHealth",
+          "description": "Health gates which members are eligible to be placed on."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "required": [
+        "name",
+        "members"
+      ],
+      "description": "AgentGroup declares a set of interchangeable placement members behind one nameable sling target."
+    },
+    "AgentGroupHealth": {
+      "properties": {
+        "drain_ack_stranded": {
+          "type": "boolean",
+          "description": "DrainAckStranded (default true) skips a member with a fungible seat that\nacknowledged its own drain while still holding assigned work."
+        },
+        "require_routable_runtime": {
+          "type": "boolean",
+          "description": "RequireRoutableRuntime (default true) skips a member whose selected\nruntime_provider cannot be resolved to a declared runtime. This is the\nonly coupling between agent groups and per-agent runtime selection."
+        }
+      },
+      "additionalProperties": false,
+      "type": "object",
+      "description": "AgentGroupHealth holds a group's health gates."
+    },
     "AgentOverride": {
       "properties": {
         "agent": {
@@ -1151,6 +1199,13 @@
           },
           "type": "array",
           "description": "NamedSessions lists canonical alias-backed sessions built from\nreusable agent templates."
+        },
+        "agent_groups": {
+          "items": {
+            "$ref": "#/$defs/AgentGroup"
+          },
+          "type": "array",
+          "description": "AgentGroups declares sets of interchangeable placement members behind one\nnameable sling target. A group is resolved to exactly one concrete member\nbefore anything is routed, so gc.routed_to keeps naming a single agent.\n\nAuthored in city.toml only, never composed from packs: membership is a\ndeployment-level assertion over the agents a particular city configured,\nwhich a shared pack cannot make. Empty (the default) leaves every\nagent-group code path inert — see AgentGroupsConfigured."
         },
         "rigs": {
           "items": {

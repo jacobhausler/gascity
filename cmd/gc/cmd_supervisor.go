@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
@@ -2740,6 +2741,14 @@ func prepareCityForSupervisor(cityPath, cityName string, cfg *config.City, stder
 		return config.ValidateAgents(cfg.Agents)
 	}); err != nil {
 		return fmt.Errorf("validate agents: %w", err)
+	}
+
+	// Validate agent groups after agents: every rule references a configured
+	// agent, so an agent-level error is the more useful one to report first.
+	if err := runStep("validating_agent_groups", func() error {
+		return agentutil.ValidateAgentGroups(cfg)
+	}); err != nil {
+		return fmt.Errorf("validate agent groups: %w", err)
 	}
 
 	// Skill collision validation precedes materialization so a

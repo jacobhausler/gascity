@@ -23,6 +23,7 @@ City is the top-level configuration for a Gas City instance.
 | `defaults` | PackDefaults |  |  | Defaults holds city-level defaults that seed generated config. The canonical default-rig import table is [defaults.rig.imports]. |
 | `agent` | []Agent |  |  | Agents lists all configured agents in this city. Pack-composed cities can compose agents through [imports.*] and ship without any [[agent]] block. |
 | `named_session` | []NamedSession |  |  | NamedSessions lists canonical alias-backed sessions built from reusable agent templates. |
+| `agent_groups` | []AgentGroup |  |  | AgentGroups declares sets of interchangeable placement members behind one nameable sling target. A group is resolved to exactly one concrete member before anything is routed, so gc.routed_to keeps naming a single agent.  Authored in city.toml only, never composed from packs: membership is a deployment-level assertion over the agents a particular city configured, which a shared pack cannot make. Empty (the default) leaves every agent-group code path inert — see AgentGroupsConfigured. |
 | `rigs` | []Rig |  |  | Rigs lists external projects registered in the city. |
 | `patches` | Patches |  |  | Patches holds targeted modifications applied after fragment merge. |
 | `storage` | StorageConfig |  |  | Storage assigns the six semantic storage classes to immutable named bindings. Nil preserves the existing all-Work storage topology. |
@@ -153,6 +154,26 @@ AgentDefaults provides agent defaults declared via [agent_defaults] in city.toml
 | `append_fragments` | []string |  |  | AppendFragments lists named template fragments to auto-append to .template.md prompts after rendering. Legacy .md.tmpl prompts are still supported during the transition; plain .md remains inert. V2 migration convenience — replaces global_fragments/inject_fragments for config-wide defaults. |
 | `skills` | []string |  |  | Skills is a tombstone field retained for v0.15.1 backwards compatibility. Parsed and composed for migration visibility, but attachment-list fields are accepted but ignored by the active materializer. |
 | `mcp` | []string |  |  | MCP is a tombstone field retained for v0.15.1 backwards compatibility. Parsed and composed for migration visibility, but attachment-list fields are accepted but ignored by the active materializer. |
+
+## AgentGroup
+
+AgentGroup declares a set of interchangeable placement members behind one nameable sling target.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | **yes** |  | Name is the group's rig-qualified sling target, e.g. "myrig/heavy". It must not collide with a configured agent or named session. |
+| `members` | []string | **yes** |  | Members lists the group's placement candidates in preference order, as rig-qualified agent identities. Every member must be a configured agent in the group's own rig. |
+| `strategy` | string |  |  | Strategy selects the placement policy. "" (default) is "ordered-failover", which is the only accepted value today; any other value is rejected at config load. Enum: `ordered-failover` |
+| `health` | AgentGroupHealth |  |  | Health gates which members are eligible to be placed on. |
+
+## AgentGroupHealth
+
+AgentGroupHealth holds a group's health gates.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `drain_ack_stranded` | boolean |  |  | DrainAckStranded (default true) skips a member with a fungible seat that acknowledged its own drain while still holding assigned work. |
+| `require_routable_runtime` | boolean |  |  | RequireRoutableRuntime (default true) skips a member whose selected runtime_provider cannot be resolved to a declared runtime. This is the only coupling between agent groups and per-agent runtime selection. |
 
 ## AgentOverride
 

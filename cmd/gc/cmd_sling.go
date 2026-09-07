@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gastownhall/gascity/internal/agentgroup"
 	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
@@ -432,12 +433,13 @@ func cmdSlingWithJSON(args []string, isFormula, doNudge, force bool, title strin
 	// rig-scoped implicit agents (e.g., "hello-world/claude").
 	resolveRigPaths(cityPath, cfg.Rigs)
 
-	a, ok := resolveAgentIdentity(cfg, target, currentRigContext(cfg))
+	a, groupChoice, ok := resolveSlingTarget(cfg, target, currentRigContext(cfg))
 	if !ok {
+		msg := slingTargetResolveFailedMsg(cfg, target)
 		if jsonOutput {
-			return writeJSONError(stdout, stderr, "target_resolve_failed", agentNotFoundMsg("gc sling", target, cfg), 1)
+			return writeJSONError(stdout, stderr, "target_resolve_failed", msg, 1)
 		}
-		fmt.Fprintln(stderr, agentNotFoundMsg("gc sling", target, cfg)) //nolint:errcheck // best-effort stderr
+		fmt.Fprintln(stderr, msg) //nolint:errcheck // best-effort stderr
 		return 1
 	}
 
@@ -480,6 +482,10 @@ func cmdSlingWithJSON(args []string, isFormula, doNudge, force bool, title strin
 		InlineText:    inlineText,
 		ScopeKind:     scopeKind,
 		ScopeRef:      scopeRef,
+		// Empty unless the target named a group; Target is the concrete
+		// member either way.
+		AgentGroup:         groupChoice.Group,
+		AgentGroupStrategy: string(groupChoice.Strategy),
 	}
 	runner := SlingRunner(shellSlingRunner)
 	if len(storeEnv) > 0 {
@@ -728,7 +734,47 @@ func cliDirectSessionResolver(store beads.Store, cityName, cityPath string, cfg 
 type cliAgentResolver struct{}
 
 func (cliAgentResolver) ResolveAgent(cfg *config.City, name, rigContext string) (config.Agent, bool) {
-	return resolveAgentIdentity(cfg, name, rigContext)
+	a, _, ok := resolveSlingTarget(cfg, name, rigContext)
+	return a, ok
+}
+
+// slingTargetResolveFailedMsg explains why a sling target did not resolve.
+//
+// A configured group with no eligible member is a different failure from an
+// unknown name and must not be reported as one: the target exists, and the
+// operator needs the per-member reasons to know which lane to fix.
+func slingTargetResolveFailedMsg(cfg *config.City, target string) string {
+	if g := config.FindAgentGroup(cfg, strings.TrimSpace(target)); g != nil {
+		reasons := agentgroup.IneligibleReasons(agentutil.AgentGroupMembers(cfg, g, agentutil.GroupFacts{}))
+		return fmt.Sprintf("gc sling: agent group %q has no eligible member (%s)", g.Name, strings.Join(reasons, "; "))
+	}
+	return agentNotFoundMsg("gc sling", target, cfg)
+}
+
+// resolveSlingTarget resolves a sling target, which — unlike every other place
+// an agent is addressed — may also name an agent group.
+//
+// A configured agent always wins: the ordinary ladder runs first and the group
+// step only sees an input nothing else matched. (Config validation already
+// rejects a group name that collides with an agent or named session; this
+// ordering makes a configured agent win even if that check were bypassed.)
+//
+// The returned agent is the concrete member the group's strategy chose, and is
+// used downstream exactly as a typed-by-hand member would be: the route it
+// stamps is one configured template, so the demand predicate, the generated
+// worker query and the claim predicate all keep matching what they match today.
+// The returned choice is the group provenance to stamp beside that route, and
+// is the zero value for an ordinary target.
+//
+// Health facts are deliberately config-only here: a `gc sling` process holds no
+// session snapshot and no runtime registry, so it filters on suspension, rig
+// suspension and capacity, and leaves the rest to the controller's rebind pass,
+// which does hold them.
+func resolveSlingTarget(cfg *config.City, input, rigContext string) (config.Agent, agentgroup.Choice, bool) {
+	if a, ok := resolveAgentIdentity(cfg, input, rigContext); ok {
+		return a, agentgroup.Choice{}, true
+	}
+	return agentutil.ResolveAgentGroupTarget(cfg, input, agentutil.GroupFacts{})
 }
 
 // cliBranchResolver implements sling.BranchResolver using git.
@@ -776,6 +822,34 @@ func (r cliBeadRouter) Route(_ context.Context, req sling.RouteRequest) error {
 	}
 	if err := r.deps.Store.SetMetadata(req.BeadID, beadmeta.RoutedToMetadataKey, routedTo); err != nil {
 		return fmt.Errorf("setting gc.routed_to on %s: %w", req.BeadID, err)
+	}
+	return stampAgentGroupProvenance(r.deps.Store, req)
+}
+
+// stampAgentGroupProvenance records which agent group resolved a route, and
+// under which strategy, beside the concrete gc.routed_to the group chose.
+//
+// The route itself is unchanged — one concrete member, exactly as an ordinary
+// sling writes it. These keys are what let the controller re-pick the member
+// later while the bead is still open and unclaimed; a reader that does not know
+// them sees an ordinary routed bead.
+//
+// A no-op for an ordinary target, which is every sling in a city that declares
+// no groups.
+func stampAgentGroupProvenance(store beads.Store, req sling.RouteRequest) error {
+	group := strings.TrimSpace(req.AgentGroup)
+	if group == "" || store == nil {
+		return nil
+	}
+	if err := store.SetMetadata(req.BeadID, beadmeta.AgentGroupMetadataKey, group); err != nil {
+		return fmt.Errorf("setting %s on %s: %w", beadmeta.AgentGroupMetadataKey, req.BeadID, err)
+	}
+	strategy := strings.TrimSpace(req.AgentGroupStrategy)
+	if strategy == "" {
+		return nil
+	}
+	if err := store.SetMetadata(req.BeadID, beadmeta.AgentGroupStrategyMetadataKey, strategy); err != nil {
+		return fmt.Errorf("setting %s on %s: %w", beadmeta.AgentGroupStrategyMetadataKey, req.BeadID, err)
 	}
 	return nil
 }

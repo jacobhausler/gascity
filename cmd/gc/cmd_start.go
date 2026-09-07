@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/gastownhall/gascity/internal/agent"
+	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/citylayout"
 	"github.com/gastownhall/gascity/internal/clock"
@@ -850,6 +851,13 @@ func doStartStandalone(args []string, controllerMode bool, stdout, stderr io.Wri
 
 	// Validate agents.
 	if err := config.ValidateAgents(cfg.Agents); err != nil {
+		fmt.Fprintf(stderr, "gc start: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+
+	// Validate agent groups after agents: every rule references a configured
+	// agent, so an agent-level error is the more useful one to report first.
+	if err := agentutil.ValidateAgentGroups(cfg); err != nil {
 		fmt.Fprintf(stderr, "gc start: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}

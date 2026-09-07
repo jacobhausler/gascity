@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/gastownhall/gascity/internal/agentutil"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
@@ -1418,13 +1419,29 @@ func resolveAttemptRouteBinding(target string, cfg *config.City, store beads.Sto
 		}
 
 		if agentCfg := config.FindAgent(cfg, target); agentCfg != nil {
-			binding := attemptRouteBinding{qualifiedName: agentCfg.QualifiedName()}
-			if isAttemptMultiSessionTarget(agentCfg.QualifiedName(), cfg) {
-				binding.metadataOnly = true
-				return binding, true
-			}
-			binding.sessionName = config.NamedSessionRuntimeName(cfg.EffectiveCityName(), cfg.Workspace, agentCfg.QualifiedName())
-			return binding, true
+			return attemptRouteBindingForAgent(agentCfg, cfg), true
+		}
+
+		// An agent group resolves ONCE, here, to a concrete member — and that is
+		// the end of it. applyAttemptStepRoute deliberately stamps no
+		// gc.agent_group on a step, so no step row is ever eligible for the
+		// controller's rebind pass. Three reasons this asymmetry with `gc sling`
+		// is right rather than an oversight:
+		//
+		//   - a step's gc.execution_routed_to is the durable attribution for the
+		//     attempt; rebinding gc.routed_to underneath it would leave the two
+		//     disagreeing about who ran the step;
+		//   - an attempt is already the unit of retry, and the NEXT attempt
+		//     re-resolves the group from scratch — late binding is present at
+		//     the right granularity, without a second mechanism competing for
+		//     the same row;
+		//   - the rebind pass filters on an empty assignee anyway, and a step
+		//     under an active attempt is not in that set.
+		//
+		// Facts are config-only for the same reason as at sling time: the
+		// dispatcher holds no session snapshot here.
+		if member, _, ok := agentutil.ResolveAgentGroupTarget(cfg, target, agentutil.GroupFacts{}); ok {
+			return attemptRouteBindingForAgent(&member, cfg), true
 		}
 	}
 	if store != nil {
@@ -1434,6 +1451,23 @@ func resolveAttemptRouteBinding(target string, cfg *config.City, store beads.Sto
 	}
 
 	return attemptRouteBinding{}, false
+}
+
+// attemptRouteBindingForAgent builds the binding for a concrete agent. Shared
+// by the direct-agent and agent-group arms so a group member is bound exactly
+// as the same agent named directly would be.
+func attemptRouteBindingForAgent(agentCfg *config.Agent, cfg *config.City) attemptRouteBinding {
+	binding := attemptRouteBinding{qualifiedName: agentCfg.QualifiedName()}
+	if isAttemptMultiSessionTarget(agentCfg.QualifiedName(), cfg) {
+		binding.metadataOnly = true
+		// A one-shot runtime exits after a single bounded invocation, so no
+		// session survives between attempts to carry continuation. Mirrors
+		// graphroute.GraphRouteBindingForAgent's IndependentSteps.
+		binding.independentSteps = agentCfg.Lifecycle == config.AgentLifecycleOneShot
+		return binding
+	}
+	binding.sessionName = config.NamedSessionRuntimeName(cfg.EffectiveCityName(), cfg.Workspace, agentCfg.QualifiedName())
+	return binding
 }
 
 func routedAttemptTarget(bead beads.Bead) string {

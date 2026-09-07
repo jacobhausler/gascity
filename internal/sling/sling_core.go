@@ -698,11 +698,13 @@ func finalize(opts SlingOpts, deps SlingDeps, beadID, method string, result Slin
 			return result, fmt.Errorf("%w", err)
 		}
 		req := RouteRequest{
-			BeadID:  beadID,
-			Target:  agentutil.RoutedToIdentity(&a),
-			WorkDir: rigDir,
-			Env:     slingEnv,
-			Force:   opts.Force,
+			BeadID:             beadID,
+			Target:             agentutil.RoutedToIdentity(&a),
+			WorkDir:            rigDir,
+			Env:                slingEnv,
+			Force:              opts.Force,
+			AgentGroup:         opts.AgentGroup,
+			AgentGroupStrategy: opts.AgentGroupStrategy,
 		}
 		if err := deps.Router.Route(context.Background(), req); err != nil {
 			telemetry.RecordSling(context.Background(), a.QualifiedName(), TargetType(&a), method, err)
