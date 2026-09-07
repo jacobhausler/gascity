@@ -281,6 +281,7 @@ func Catalog() []Entry {
 				"default-route conformance; routed lanes covered by focused router routing tests",
 				SymbolRef{ImportPath: "fmt", Name: "Sprintf"},
 				repoSymbol("internal/runtime", "NewFake"),
+				repoSymbol("internal/runtime/router", "fixedFactory"),
 				SymbolRef{ImportPath: "sync/atomic", Name: "AddInt64"},
 			)},
 		},
@@ -291,7 +292,7 @@ func Catalog() []Entry {
 			Constructors: []SymbolRef{autoConstructor},
 			Source: &SourceRef{
 				File:     "cmd/gc/providers.go",
-				Function: "resolveSessionTransportProvider",
+				Function: "resolveSessionTransportProviderBase",
 				Reason:   "conditional transport composition is outside the runtime registry",
 			},
 			Claims: []ContractClaim{provedRuntimeScoped(

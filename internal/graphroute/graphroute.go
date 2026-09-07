@@ -218,7 +218,7 @@ func ApplyGraphRouteBinding(step *formula.RecipeStep, binding GraphRouteBinding)
 		if binding.IndependentSteps {
 			// One-shot lifecycle overrides the formula's opt-in: no runtime survives
 			// this invocation to carry a continuation group into the next step, so
-			// the pinned pair is cleared rather than honoured and every executable
+			// the pinned pair is cleared rather than honored and every executable
 			// step stays claimable by a fresh pool slot (#5584).
 			for _, key := range beadmeta.SessionAffinityMetadataKeys {
 				delete(step.Metadata, key)

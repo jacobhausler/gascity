@@ -10,13 +10,13 @@ import (
 )
 
 func agentGroupStepConfig() *config.City {
-	max := 4
+	maxSessions := 4
 	return &config.City{
 		Workspace: config.Workspace{Name: "test-city"},
 		Rigs:      []config.Rig{{Name: "grouprig"}},
 		Agents: []config.Agent{
-			{Name: "first", Dir: "grouprig", Lifecycle: config.AgentLifecycleOneShot, MaxActiveSessions: &max},
-			{Name: "second", Dir: "grouprig", Lifecycle: config.AgentLifecycleOneShot, MaxActiveSessions: &max},
+			{Name: "first", Dir: "grouprig", Lifecycle: config.AgentLifecycleOneShot, MaxActiveSessions: &maxSessions},
+			{Name: "second", Dir: "grouprig", Lifecycle: config.AgentLifecycleOneShot, MaxActiveSessions: &maxSessions},
 		},
 		AgentGroups: []config.AgentGroup{{
 			Name:    "grouprig/heavy",

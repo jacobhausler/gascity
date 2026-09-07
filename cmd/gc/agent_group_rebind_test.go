@@ -20,12 +20,12 @@ const (
 )
 
 func agentGroupConfig() *config.City {
-	max := 4
+	maxSessions := 4
 	return &config.City{
 		Rigs: []config.Rig{{Name: "grouprig"}},
 		Agents: []config.Agent{
-			{Name: "first", Dir: "grouprig", Lifecycle: config.AgentLifecycleOneShot, MaxActiveSessions: &max},
-			{Name: "second", Dir: "grouprig", Lifecycle: config.AgentLifecycleOneShot, MaxActiveSessions: &max},
+			{Name: "first", Dir: "grouprig", Lifecycle: config.AgentLifecycleOneShot, MaxActiveSessions: &maxSessions},
+			{Name: "second", Dir: "grouprig", Lifecycle: config.AgentLifecycleOneShot, MaxActiveSessions: &maxSessions},
 		},
 		AgentGroups: []config.AgentGroup{{
 			Name:    rebindGroup,
@@ -67,10 +67,9 @@ func routeOf(t *testing.T, store beads.Store, id string) string {
 	return strings.TrimSpace(got.Metadata[beadmeta.RoutedToMetadataKey])
 }
 
-func runRebind(cfg *config.City, row beads.Bead, store beads.Store, facts agentutil.GroupFacts) *bytes.Buffer {
-	var stderr bytes.Buffer
+func runRebind(cfg *config.City, row beads.Bead, store beads.Store, facts agentutil.GroupFacts) {
+	var stderr strings.Builder
 	rebindAgentGroupRoutedWork(rebindDomainT, cfg, []beads.Bead{row}, []beads.Store{store}, facts, &stderr)
-	return &stderr
 }
 
 // RED-to-GREEN: each way the preferred member can become ineligible moves the

@@ -49,11 +49,11 @@ type Context struct {
 	// techniques above: a relay that terminates TLS with
 	// `client_auth require_and_verify` authenticates the caller by certificate
 	// before any bearer or grant is even parsed. Both must be set together.
-	ClientCertFile           string   `toml:"client_cert_file,omitempty"`
-	ClientKeyFile            string   `toml:"client_key_file,omitempty"`
-	TLSServerName            string   `toml:"tls_server_name,omitempty"`
-	InsecureSkipVerify       bool     `toml:"insecure_skip_verify,omitempty"`
-	Timeout                  string   `toml:"timeout,omitempty"` // REST overall timeout; never applied to SSE streams
+	ClientCertFile     string `toml:"client_cert_file,omitempty"`
+	ClientKeyFile      string `toml:"client_key_file,omitempty"`
+	TLSServerName      string `toml:"tls_server_name,omitempty"`
+	InsecureSkipVerify bool   `toml:"insecure_skip_verify,omitempty"`
+	Timeout            string `toml:"timeout,omitempty"` // REST overall timeout; never applied to SSE streams
 }
 
 // File is the on-disk shape of ~/.gc/contexts.toml. Default names the sticky

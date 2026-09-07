@@ -8,11 +8,11 @@ package storebindingtest
 // leg the design names, they need no provider, no CGO and no filesystem, and
 // they keep this package's own tests free of any storage provider.
 //
-// The reference declares exactly the capabilities it has. beads.MemStore has
-// no two-argument claim and its Tx is a straight pass-through with no
-// rollback, so Claims and Transactions are false here. Declaring them would
-// be the very capability-loss defect the suites exist to catch, and
-// BrokenGraphStore proves that by declaring them anyway.
+// The reference declares exactly the capabilities it has. beads.MemStore now
+// has the two-argument claim, while its Tx is still a straight pass-through
+// with no rollback, so Claims is true and Transactions is false here.
+// Declaring Transactions would be the capability-loss defect the suites exist
+// to catch, and BrokenGraphStore proves that by declaring it anyway.
 
 import (
 	"github.com/gastownhall/gascity/internal/beads"
@@ -21,7 +21,7 @@ import (
 
 // ReferenceCapability is what the Beads-over-memory reference honestly
 // declares for every class it serves.
-var ReferenceCapability = storebinding.ClassCapability{Available: true}
+var ReferenceCapability = storebinding.ClassCapability{Available: true, Claims: true}
 
 // ReferenceAdapters returns the canonical Beads adapters over one fresh
 // in-memory store, with an in-memory nudge queue bound as the queue front

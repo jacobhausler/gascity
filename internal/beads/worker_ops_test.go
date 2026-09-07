@@ -20,8 +20,8 @@ func TestStoreClaimContract(t *testing.T) {
 		name     string
 		newStore func(t *testing.T) beads.Store
 	}{
-		{"MemStore", func(t *testing.T) beads.Store { return beads.NewMemStore() }},
-		{"NativeDoltStore", func(t *testing.T) beads.Store { return beads.NewNativeDoltStoreForConformance() }},
+		{"MemStore", func(_ *testing.T) beads.Store { return beads.NewMemStore() }},
+		{"NativeDoltStore", func(_ *testing.T) beads.Store { return beads.NewNativeDoltStoreForConformance() }},
 	} {
 		t.Run(backend.name, func(t *testing.T) {
 			newStore := func(t *testing.T) (beads.Store, beads.Bead) {

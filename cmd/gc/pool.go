@@ -302,6 +302,7 @@ func deepCopyAgent(src *config.Agent, name, dir string) config.Agent {
 		Scope:             src.Scope,
 		Session:           src.Session,
 		Provider:          src.Provider,
+		RuntimeProvider:   src.RuntimeProvider,
 		Upstream:          src.Upstream,
 		InheritedProvider: src.InheritedProvider,
 		PromptTemplate:    src.PromptTemplate,
@@ -317,6 +318,7 @@ func deepCopyAgent(src *config.Agent, name, dir string) config.Agent {
 		SessionSetupScript: src.SessionSetupScript,
 		OverlayDir:         src.OverlayDir,
 		SourceDir:          src.SourceDir,
+		RigName:            src.RigName,
 		// InheritedDefaultSlingFormula: deep-copied below with other pointer fields.
 		IdleTimeout:          src.IdleTimeout,
 		MaxSessionAge:        src.MaxSessionAge,

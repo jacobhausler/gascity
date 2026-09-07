@@ -8,7 +8,7 @@ import (
 	"github.com/gastownhall/gascity/internal/session"
 )
 
-// runtimeRoutingProvider is the runtime-routing analogue of
+// runtimeRoutingProvider is the runtime-routing analog of
 // [acpRoutingProvider]: a session provider that can bind one session name to a
 // specific runtime backend. Only the composite runtime router implements it;
 // every other provider hosts a single backend and needs no route.

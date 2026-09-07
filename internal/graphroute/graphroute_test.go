@@ -1251,7 +1251,7 @@ func TestDecorateGraphWorkflowRecipe_PoolContinuationGroupOptIn(t *testing.T) {
 // the slot that claims the first one. That runtime exits after one bounded
 // invocation, so the remaining steps would be stranded on a dead session. Each
 // executable step stays routed to the pool and stays independently claimable,
-// and the formula's continuation-group opt-in is cleared rather than honoured.
+// and the formula's continuation-group opt-in is cleared rather than honored.
 func TestApplyGraphRouting_OneShotPoolLeavesExecutableStepsIndependent(t *testing.T) {
 	zero := 0
 	two := 2

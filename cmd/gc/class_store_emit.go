@@ -582,6 +582,10 @@ func (s *emittingClassStore) Claim(id, assignee string) (beads.Bead, bool, error
 	return bead, claimed, err
 }
 
+func (s *emittingClassStore) Comment(id, text string) error {
+	return beads.CommentOn(s.Store, id, text)
+}
+
 func (s *emittingClassStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, error) {
 	releaser, ok := s.Store.(beads.ConditionalAssignmentReleaser)
 	if !ok {

@@ -88,8 +88,12 @@ var exemptFromIdempotency = map[string]bool{
 	"post-v0-city-by-city-name-session-by-id-wake":             true,
 	"post-v0-city-by-city-name-sling":                          true,
 	"post-v0-city-by-city-name-unregister":                     true,
-	"rotate-events":                                            true,
-	"trigger-maintenance-dolt-gc":                              true,
+	"post-v0-city-by-city-name-worker-claim":                   true,
+	"post-v0-city-by-city-name-worker-close":                   true,
+	"post-v0-city-by-city-name-worker-comment":                 true,
+	"post-v0-city-by-city-name-worker-drain-ack":               true,
+	"rotate-events":               true,
+	"trigger-maintenance-dolt-gc": true,
 }
 
 type idemSpecDoc struct {

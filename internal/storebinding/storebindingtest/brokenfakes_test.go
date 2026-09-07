@@ -35,10 +35,10 @@ func TestGraphSuiteRejectsBrokenGraphStores(t *testing.T) {
 			capability: ReferenceCapability,
 		},
 		{
-			name:       "a store that declares capabilities it does not have",
+			name:       "a store that declares a transaction capability it does not have",
 			defect:     GraphDefectNone,
-			capability: storebinding.ClassCapability{Available: true, Transactions: true, Claims: true},
-			want:       []string{"ClaimIsCompareAndSwap", "TransactionRollsBackEntirely"},
+			capability: storebinding.ClassCapability{Available: true, Transactions: true},
+			want:       []string{"TransactionRollsBackEntirely"},
 		},
 		{
 			name:       "a class handed out while declared unavailable",

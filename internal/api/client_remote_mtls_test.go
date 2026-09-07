@@ -149,7 +149,7 @@ func TestRemoteTLSConfigRejectsUnreadablePair(t *testing.T) {
 	}
 }
 
-// TestRemoteClientReachesRequireAndVerifyServer is the behaviour the DF-03b
+// TestRemoteClientReachesRequireAndVerifyServer is the behavior the DF-03b
 // relay needs end to end: against a server configured exactly like the
 // control-plane relay (RequireAndVerifyClientCert), a client WITH the pair
 // completes the handshake and a client WITHOUT it is refused.

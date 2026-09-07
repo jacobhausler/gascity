@@ -102,7 +102,7 @@ func TestRouteSessionRuntimeIgnoresNonRoutingProvider(t *testing.T) {
 	}
 }
 
-// The seam must be the RouteRuntime analogue of the RouteACP seam: both
+// The seam must be the RouteRuntime analog of the RouteACP seam: both
 // capabilities are asserted, never a concrete provider type, so the runtime
 // router can wrap the transport router and vice versa.
 func TestRuntimeRouterSatisfiesBothRoutingSeams(t *testing.T) {

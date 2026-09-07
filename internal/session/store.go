@@ -244,7 +244,7 @@ func (s *Store) SetCurrentClaim(id, beadID string) (bool, error) {
 func (s *Store) ReserveCurrentClaim(id, expected, beadID string) (beads.MetadataCASOutcome, error) {
 	b, err := s.validatedBead(id)
 	if err != nil {
-		return "", fmt.Errorf("%w: validating session bead %q: %v", ErrCurrentClaimCASNotAttempted, id, err)
+		return "", fmt.Errorf("%w: validating session bead %q: %w", ErrCurrentClaimCASNotAttempted, id, err)
 	}
 	return beads.ApplyMetadataCAS(s.store.Store, b.ID,
 		beadmeta.CurrentClaimBeadIDMetadataKey,
