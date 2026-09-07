@@ -774,6 +774,42 @@ func (e UsageBodySource) Valid() bool {
 	}
 }
 
+// Defines values for WorkerDrainAckOutputBodyReleaseStatus.
+const (
+	WorkerDrainAckOutputBodyReleaseStatusReleased WorkerDrainAckOutputBodyReleaseStatus = "released"
+	WorkerDrainAckOutputBodyReleaseStatusSkipped  WorkerDrainAckOutputBodyReleaseStatus = "skipped"
+)
+
+// Valid indicates whether the value is a known member of the WorkerDrainAckOutputBodyReleaseStatus enum.
+func (e WorkerDrainAckOutputBodyReleaseStatus) Valid() bool {
+	switch e {
+	case WorkerDrainAckOutputBodyReleaseStatusReleased:
+		return true
+	case WorkerDrainAckOutputBodyReleaseStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkerReleaseOutputBodyStatus.
+const (
+	WorkerReleaseOutputBodyStatusReleased WorkerReleaseOutputBodyStatus = "released"
+	WorkerReleaseOutputBodyStatusSkipped  WorkerReleaseOutputBodyStatus = "skipped"
+)
+
+// Valid indicates whether the value is a known member of the WorkerReleaseOutputBodyStatus enum.
+func (e WorkerReleaseOutputBodyStatus) Valid() bool {
+	switch e {
+	case WorkerReleaseOutputBodyStatusReleased:
+		return true
+	case WorkerReleaseOutputBodyStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PostV0CityByCityNameAgentByBaseByActionParamsAction.
 const (
 	PostV0CityByCityNameAgentByBaseByActionParamsActionResume  PostV0CityByCityNameAgentByBaseByActionParamsAction = "resume"
@@ -8702,6 +8738,71 @@ type WebhookRejectedPayload struct {
 	Webhook string `json:"webhook"`
 }
 
+// WorkerClaimInputBody defines model for WorkerClaimInputBody.
+type WorkerClaimInputBody struct {
+	// Assignee Identity the bead is claimed for. This is the claim actor, not the transport identity.
+	Assignee string `json:"assignee"`
+
+	// BeadId Work bead to claim.
+	BeadId string `json:"bead_id"`
+
+	// CurrentClaim Current-claim pointer the caller observed before claiming, echoed back as the compare-and-swap's expected value. Omit when the caller did not read one; the server then derives the expected value from the stored pointer.
+	CurrentClaim *string `json:"current_claim,omitempty"`
+
+	// SessionId Session bead ID of the claiming session. The session's current-claim pointer is reserved before the claim and released again if the claim is lost.
+	SessionId string `json:"session_id"`
+}
+
+// WorkerClaimOutputBody defines model for WorkerClaimOutputBody.
+type WorkerClaimOutputBody struct {
+	Bead Bead `json:"bead"`
+
+	// Status Claim result.
+	Status string `json:"status"`
+}
+
+// WorkerCloseInputBody defines model for WorkerCloseInputBody.
+type WorkerCloseInputBody struct {
+	// BeadId Work bead to close.
+	BeadId string `json:"bead_id"`
+}
+
+// WorkerCommentInputBody defines model for WorkerCommentInputBody.
+type WorkerCommentInputBody struct {
+	// BeadId Bead to comment on.
+	BeadId string `json:"bead_id"`
+
+	// Text Comment body, appended verbatim.
+	Text string `json:"text"`
+}
+
+// WorkerCurrentOutputBody defines model for WorkerCurrentOutputBody.
+type WorkerCurrentOutputBody struct {
+	// BeadId Work bead the session most recently claimed, or empty when it has claimed nothing.
+	BeadId string `json:"bead_id"`
+}
+
+// WorkerDrainAckInputBody defines model for WorkerDrainAckInputBody.
+type WorkerDrainAckInputBody struct {
+	// SessionId Session bead ID acknowledging its own drain.
+	SessionId string `json:"session_id"`
+}
+
+// WorkerDrainAckOutputBody defines model for WorkerDrainAckOutputBody.
+type WorkerDrainAckOutputBody struct {
+	// ReleaseStatus Outcome of the release the acknowledgement attempted: released when the CAS applied, skipped when the bead no longer named this session's identity. Empty when the session held nothing.
+	ReleaseStatus *WorkerDrainAckOutputBodyReleaseStatus `json:"release_status,omitempty"`
+
+	// Released Work bead the acknowledgement attempted to hand back, when the session's pointer still named one.
+	Released *string `json:"released,omitempty"`
+
+	// Status Acknowledgement result.
+	Status string `json:"status"`
+}
+
+// WorkerDrainAckOutputBodyReleaseStatus Outcome of the release the acknowledgement attempted: released when the CAS applied, skipped when the bead no longer named this session's identity. Empty when the session held nothing.
+type WorkerDrainAckOutputBodyReleaseStatus string
+
 // WorkerOperationEventPayload defines model for WorkerOperationEventPayload.
 type WorkerOperationEventPayload struct {
 	// AgentName Qualified agent identity (best-effort, absent if the session has no agent_name metadata or alias).
@@ -8757,6 +8858,27 @@ type WorkerOperationEventPayload struct {
 	// Unpriced True when tokens were observed but no price resolved (best-effort tri-state; absent = not evaluated).
 	Unpriced *bool `json:"unpriced,omitempty"`
 }
+
+// WorkerReleaseInputBody defines model for WorkerReleaseInputBody.
+type WorkerReleaseInputBody struct {
+	// Assignee Expected current assignee. The release is applied only while the bead still names this holder.
+	Assignee string `json:"assignee"`
+
+	// BeadId Work bead to release.
+	BeadId string `json:"bead_id"`
+
+	// SessionId Session bead ID whose current-claim pointer is cleared alongside the release. Optional: a release with no session named touches only the work bead.
+	SessionId *string `json:"session_id,omitempty"`
+}
+
+// WorkerReleaseOutputBody defines model for WorkerReleaseOutputBody.
+type WorkerReleaseOutputBody struct {
+	// Status Release result: released when the CAS applied, skipped when the bead no longer named the expected holder.
+	Status WorkerReleaseOutputBodyStatus `json:"status"`
+}
+
+// WorkerReleaseOutputBodyStatus Release result: released when the CAS applied, skipped when the bead no longer named the expected holder.
+type WorkerReleaseOutputBodyStatus string
 
 // WorkflowAttemptSummary defines model for WorkflowAttemptSummary.
 type WorkflowAttemptSummary struct {
@@ -9857,6 +9979,42 @@ type GetV0CityByCityNameWaitsParams struct {
 	Session *string `form:"session,omitempty" json:"session,omitempty"`
 }
 
+// DeleteV0CityByCityNameWorkerClaimParams defines parameters for DeleteV0CityByCityNameWorkerClaim.
+type DeleteV0CityByCityNameWorkerClaimParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+}
+
+// PostV0CityByCityNameWorkerClaimParams defines parameters for PostV0CityByCityNameWorkerClaim.
+type PostV0CityByCityNameWorkerClaimParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+}
+
+// PostV0CityByCityNameWorkerCloseParams defines parameters for PostV0CityByCityNameWorkerClose.
+type PostV0CityByCityNameWorkerCloseParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+}
+
+// PostV0CityByCityNameWorkerCommentParams defines parameters for PostV0CityByCityNameWorkerComment.
+type PostV0CityByCityNameWorkerCommentParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+}
+
+// GetV0CityByCityNameWorkerCurrentParams defines parameters for GetV0CityByCityNameWorkerCurrent.
+type GetV0CityByCityNameWorkerCurrentParams struct {
+	// SessionId Session bead ID whose current claim is read.
+	SessionId string `form:"session_id" json:"session_id"`
+}
+
+// PostV0CityByCityNameWorkerDrainAckParams defines parameters for PostV0CityByCityNameWorkerDrainAck.
+type PostV0CityByCityNameWorkerDrainAckParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+}
+
 // DeleteV0CityByCityNameWorkflowByWorkflowIdParams defines parameters for DeleteV0CityByCityNameWorkflowByWorkflowId.
 type DeleteV0CityByCityNameWorkflowByWorkflowIdParams struct {
 	// ScopeKind Scope kind (city or rig).
@@ -10051,6 +10209,21 @@ type CreateSessionJSONRequestBody = SessionCreateBody
 
 // PostV0CityByCityNameSlingJSONRequestBody defines body for PostV0CityByCityNameSling for application/json ContentType.
 type PostV0CityByCityNameSlingJSONRequestBody = SlingInputBody
+
+// DeleteV0CityByCityNameWorkerClaimJSONRequestBody defines body for DeleteV0CityByCityNameWorkerClaim for application/json ContentType.
+type DeleteV0CityByCityNameWorkerClaimJSONRequestBody = WorkerReleaseInputBody
+
+// PostV0CityByCityNameWorkerClaimJSONRequestBody defines body for PostV0CityByCityNameWorkerClaim for application/json ContentType.
+type PostV0CityByCityNameWorkerClaimJSONRequestBody = WorkerClaimInputBody
+
+// PostV0CityByCityNameWorkerCloseJSONRequestBody defines body for PostV0CityByCityNameWorkerClose for application/json ContentType.
+type PostV0CityByCityNameWorkerCloseJSONRequestBody = WorkerCloseInputBody
+
+// PostV0CityByCityNameWorkerCommentJSONRequestBody defines body for PostV0CityByCityNameWorkerComment for application/json ContentType.
+type PostV0CityByCityNameWorkerCommentJSONRequestBody = WorkerCommentInputBody
+
+// PostV0CityByCityNameWorkerDrainAckJSONRequestBody defines body for PostV0CityByCityNameWorkerDrainAck for application/json ContentType.
+type PostV0CityByCityNameWorkerDrainAckJSONRequestBody = WorkerDrainAckInputBody
 
 // AsAdapterEventPayload returns the union data inside the EventPayload as a AdapterEventPayload
 func (t EventPayload) AsAdapterEventPayload() (AdapterEventPayload, error) {
@@ -19556,6 +19729,34 @@ type ClientInterface interface {
 	// GetV0CityByCityNameWaits request
 	GetV0CityByCityNameWaits(ctx context.Context, cityName string, params *GetV0CityByCityNameWaitsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// DeleteV0CityByCityNameWorkerClaimWithBody request with any body
+	DeleteV0CityByCityNameWorkerClaimWithBody(ctx context.Context, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	DeleteV0CityByCityNameWorkerClaim(ctx context.Context, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, body DeleteV0CityByCityNameWorkerClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostV0CityByCityNameWorkerClaimWithBody request with any body
+	PostV0CityByCityNameWorkerClaimWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameWorkerClaim(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerClaimParams, body PostV0CityByCityNameWorkerClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostV0CityByCityNameWorkerCloseWithBody request with any body
+	PostV0CityByCityNameWorkerCloseWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCloseParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameWorkerClose(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCloseParams, body PostV0CityByCityNameWorkerCloseJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostV0CityByCityNameWorkerCommentWithBody request with any body
+	PostV0CityByCityNameWorkerCommentWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCommentParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameWorkerComment(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCommentParams, body PostV0CityByCityNameWorkerCommentJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// GetV0CityByCityNameWorkerCurrent request
+	GetV0CityByCityNameWorkerCurrent(ctx context.Context, cityName string, params *GetV0CityByCityNameWorkerCurrentParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// PostV0CityByCityNameWorkerDrainAckWithBody request with any body
+	PostV0CityByCityNameWorkerDrainAckWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameWorkerDrainAck(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, body PostV0CityByCityNameWorkerDrainAckJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// DeleteV0CityByCityNameWorkflowByWorkflowId request
 	DeleteV0CityByCityNameWorkflowByWorkflowId(ctx context.Context, cityName string, workflowId string, params *DeleteV0CityByCityNameWorkflowByWorkflowIdParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -21977,6 +22178,138 @@ func (c *Client) GetV0CityByCityNameWaitById(ctx context.Context, cityName strin
 
 func (c *Client) GetV0CityByCityNameWaits(ctx context.Context, cityName string, params *GetV0CityByCityNameWaitsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetV0CityByCityNameWaitsRequest(c.Server, cityName, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteV0CityByCityNameWorkerClaimWithBody(ctx context.Context, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteV0CityByCityNameWorkerClaimRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteV0CityByCityNameWorkerClaim(ctx context.Context, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, body DeleteV0CityByCityNameWorkerClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteV0CityByCityNameWorkerClaimRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerClaimWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerClaimRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerClaim(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerClaimParams, body PostV0CityByCityNameWorkerClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerClaimRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerCloseWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCloseParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerCloseRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerClose(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCloseParams, body PostV0CityByCityNameWorkerCloseJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerCloseRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerCommentWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCommentParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerCommentRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerComment(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCommentParams, body PostV0CityByCityNameWorkerCommentJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerCommentRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) GetV0CityByCityNameWorkerCurrent(ctx context.Context, cityName string, params *GetV0CityByCityNameWorkerCurrentParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetV0CityByCityNameWorkerCurrentRequest(c.Server, cityName, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerDrainAckWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerDrainAckRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerDrainAck(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, body PostV0CityByCityNameWorkerDrainAckJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerDrainAckRequest(c.Server, cityName, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -32009,6 +32342,358 @@ func NewGetV0CityByCityNameWaitsRequest(server string, cityName string, params *
 	return req, nil
 }
 
+// NewDeleteV0CityByCityNameWorkerClaimRequest calls the generic DeleteV0CityByCityNameWorkerClaim builder with application/json body
+func NewDeleteV0CityByCityNameWorkerClaimRequest(server string, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, body DeleteV0CityByCityNameWorkerClaimJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewDeleteV0CityByCityNameWorkerClaimRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewDeleteV0CityByCityNameWorkerClaimRequestWithBody generates requests for DeleteV0CityByCityNameWorkerClaim with any type of body
+func NewDeleteV0CityByCityNameWorkerClaimRequestWithBody(server string, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/worker/claim", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("DELETE", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewPostV0CityByCityNameWorkerClaimRequest calls the generic PostV0CityByCityNameWorkerClaim builder with application/json body
+func NewPostV0CityByCityNameWorkerClaimRequest(server string, cityName string, params *PostV0CityByCityNameWorkerClaimParams, body PostV0CityByCityNameWorkerClaimJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameWorkerClaimRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameWorkerClaimRequestWithBody generates requests for PostV0CityByCityNameWorkerClaim with any type of body
+func NewPostV0CityByCityNameWorkerClaimRequestWithBody(server string, cityName string, params *PostV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/worker/claim", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewPostV0CityByCityNameWorkerCloseRequest calls the generic PostV0CityByCityNameWorkerClose builder with application/json body
+func NewPostV0CityByCityNameWorkerCloseRequest(server string, cityName string, params *PostV0CityByCityNameWorkerCloseParams, body PostV0CityByCityNameWorkerCloseJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameWorkerCloseRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameWorkerCloseRequestWithBody generates requests for PostV0CityByCityNameWorkerClose with any type of body
+func NewPostV0CityByCityNameWorkerCloseRequestWithBody(server string, cityName string, params *PostV0CityByCityNameWorkerCloseParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/worker/close", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewPostV0CityByCityNameWorkerCommentRequest calls the generic PostV0CityByCityNameWorkerComment builder with application/json body
+func NewPostV0CityByCityNameWorkerCommentRequest(server string, cityName string, params *PostV0CityByCityNameWorkerCommentParams, body PostV0CityByCityNameWorkerCommentJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameWorkerCommentRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameWorkerCommentRequestWithBody generates requests for PostV0CityByCityNameWorkerComment with any type of body
+func NewPostV0CityByCityNameWorkerCommentRequestWithBody(server string, cityName string, params *PostV0CityByCityNameWorkerCommentParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/worker/comment", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewGetV0CityByCityNameWorkerCurrentRequest generates requests for GetV0CityByCityNameWorkerCurrent
+func NewGetV0CityByCityNameWorkerCurrentRequest(server string, cityName string, params *GetV0CityByCityNameWorkerCurrentParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/worker/current", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		queryValues := queryURL.Query()
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", false, "session_id", params.SessionId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else if parsed, err := url.ParseQuery(queryFrag); err != nil {
+			return nil, err
+		} else {
+			for k, v := range parsed {
+				for _, v2 := range v {
+					queryValues.Add(k, v2)
+				}
+			}
+		}
+
+		queryURL.RawQuery = queryValues.Encode()
+	}
+
+	req, err := http.NewRequest("GET", queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewPostV0CityByCityNameWorkerDrainAckRequest calls the generic PostV0CityByCityNameWorkerDrainAck builder with application/json body
+func NewPostV0CityByCityNameWorkerDrainAckRequest(server string, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, body PostV0CityByCityNameWorkerDrainAckJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameWorkerDrainAckRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameWorkerDrainAckRequestWithBody generates requests for PostV0CityByCityNameWorkerDrainAck with any type of body
+func NewPostV0CityByCityNameWorkerDrainAckRequestWithBody(server string, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/worker/drain-ack", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewDeleteV0CityByCityNameWorkflowByWorkflowIdRequest generates requests for DeleteV0CityByCityNameWorkflowByWorkflowId
 func NewDeleteV0CityByCityNameWorkflowByWorkflowIdRequest(server string, cityName string, workflowId string, params *DeleteV0CityByCityNameWorkflowByWorkflowIdParams) (*http.Request, error) {
 	var err error
@@ -33089,6 +33774,34 @@ type ClientWithResponsesInterface interface {
 
 	// GetV0CityByCityNameWaitsWithResponse request
 	GetV0CityByCityNameWaitsWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameWaitsParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameWaitsResponse, error)
+
+	// DeleteV0CityByCityNameWorkerClaimWithBodyWithResponse request with any body
+	DeleteV0CityByCityNameWorkerClaimWithBodyWithResponse(ctx context.Context, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameWorkerClaimResponse, error)
+
+	DeleteV0CityByCityNameWorkerClaimWithResponse(ctx context.Context, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, body DeleteV0CityByCityNameWorkerClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameWorkerClaimResponse, error)
+
+	// PostV0CityByCityNameWorkerClaimWithBodyWithResponse request with any body
+	PostV0CityByCityNameWorkerClaimWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerClaimResponse, error)
+
+	PostV0CityByCityNameWorkerClaimWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerClaimParams, body PostV0CityByCityNameWorkerClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerClaimResponse, error)
+
+	// PostV0CityByCityNameWorkerCloseWithBodyWithResponse request with any body
+	PostV0CityByCityNameWorkerCloseWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCloseParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerCloseResponse, error)
+
+	PostV0CityByCityNameWorkerCloseWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCloseParams, body PostV0CityByCityNameWorkerCloseJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerCloseResponse, error)
+
+	// PostV0CityByCityNameWorkerCommentWithBodyWithResponse request with any body
+	PostV0CityByCityNameWorkerCommentWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCommentParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerCommentResponse, error)
+
+	PostV0CityByCityNameWorkerCommentWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCommentParams, body PostV0CityByCityNameWorkerCommentJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerCommentResponse, error)
+
+	// GetV0CityByCityNameWorkerCurrentWithResponse request
+	GetV0CityByCityNameWorkerCurrentWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameWorkerCurrentParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameWorkerCurrentResponse, error)
+
+	// PostV0CityByCityNameWorkerDrainAckWithBodyWithResponse request with any body
+	PostV0CityByCityNameWorkerDrainAckWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerDrainAckResponse, error)
+
+	PostV0CityByCityNameWorkerDrainAckWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, body PostV0CityByCityNameWorkerDrainAckJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerDrainAckResponse, error)
 
 	// DeleteV0CityByCityNameWorkflowByWorkflowIdWithResponse request
 	DeleteV0CityByCityNameWorkflowByWorkflowIdWithResponse(ctx context.Context, cityName string, workflowId string, params *DeleteV0CityByCityNameWorkflowByWorkflowIdParams, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameWorkflowByWorkflowIdResponse, error)
@@ -37400,6 +38113,184 @@ func (r GetV0CityByCityNameWaitsResponse) StatusCode() int {
 	return 0
 }
 
+type DeleteV0CityByCityNameWorkerClaimResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *WorkerReleaseOutputBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON501 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteV0CityByCityNameWorkerClaimResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteV0CityByCityNameWorkerClaimResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostV0CityByCityNameWorkerClaimResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *WorkerClaimOutputBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON409 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON501 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameWorkerClaimResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameWorkerClaimResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostV0CityByCityNameWorkerCloseResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *OKResponseBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON409 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameWorkerCloseResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameWorkerCloseResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostV0CityByCityNameWorkerCommentResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *OKResponseBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON501 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameWorkerCommentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameWorkerCommentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type GetV0CityByCityNameWorkerCurrentResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *WorkerCurrentOutputBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r GetV0CityByCityNameWorkerCurrentResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetV0CityByCityNameWorkerCurrentResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostV0CityByCityNameWorkerDrainAckResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *WorkerDrainAckOutputBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON501 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameWorkerDrainAckResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameWorkerDrainAckResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
 type DeleteV0CityByCityNameWorkflowByWorkflowIdResponse struct {
 	Body                      []byte
 	HTTPResponse              *http.Response
@@ -39309,6 +40200,100 @@ func (c *ClientWithResponses) GetV0CityByCityNameWaitsWithResponse(ctx context.C
 		return nil, err
 	}
 	return ParseGetV0CityByCityNameWaitsResponse(rsp)
+}
+
+// DeleteV0CityByCityNameWorkerClaimWithBodyWithResponse request with arbitrary body returning *DeleteV0CityByCityNameWorkerClaimResponse
+func (c *ClientWithResponses) DeleteV0CityByCityNameWorkerClaimWithBodyWithResponse(ctx context.Context, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameWorkerClaimResponse, error) {
+	rsp, err := c.DeleteV0CityByCityNameWorkerClaimWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteV0CityByCityNameWorkerClaimResponse(rsp)
+}
+
+func (c *ClientWithResponses) DeleteV0CityByCityNameWorkerClaimWithResponse(ctx context.Context, cityName string, params *DeleteV0CityByCityNameWorkerClaimParams, body DeleteV0CityByCityNameWorkerClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameWorkerClaimResponse, error) {
+	rsp, err := c.DeleteV0CityByCityNameWorkerClaim(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteV0CityByCityNameWorkerClaimResponse(rsp)
+}
+
+// PostV0CityByCityNameWorkerClaimWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameWorkerClaimResponse
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerClaimWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerClaimParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerClaimResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerClaimWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerClaimResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerClaimWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerClaimParams, body PostV0CityByCityNameWorkerClaimJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerClaimResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerClaim(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerClaimResponse(rsp)
+}
+
+// PostV0CityByCityNameWorkerCloseWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameWorkerCloseResponse
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerCloseWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCloseParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerCloseResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerCloseWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerCloseResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerCloseWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCloseParams, body PostV0CityByCityNameWorkerCloseJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerCloseResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerClose(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerCloseResponse(rsp)
+}
+
+// PostV0CityByCityNameWorkerCommentWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameWorkerCommentResponse
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerCommentWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCommentParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerCommentResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerCommentWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerCommentResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerCommentWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerCommentParams, body PostV0CityByCityNameWorkerCommentJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerCommentResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerComment(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerCommentResponse(rsp)
+}
+
+// GetV0CityByCityNameWorkerCurrentWithResponse request returning *GetV0CityByCityNameWorkerCurrentResponse
+func (c *ClientWithResponses) GetV0CityByCityNameWorkerCurrentWithResponse(ctx context.Context, cityName string, params *GetV0CityByCityNameWorkerCurrentParams, reqEditors ...RequestEditorFn) (*GetV0CityByCityNameWorkerCurrentResponse, error) {
+	rsp, err := c.GetV0CityByCityNameWorkerCurrent(ctx, cityName, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetV0CityByCityNameWorkerCurrentResponse(rsp)
+}
+
+// PostV0CityByCityNameWorkerDrainAckWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameWorkerDrainAckResponse
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerDrainAckWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerDrainAckResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerDrainAckWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerDrainAckResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerDrainAckWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, body PostV0CityByCityNameWorkerDrainAckJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerDrainAckResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerDrainAck(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerDrainAckResponse(rsp)
 }
 
 // DeleteV0CityByCityNameWorkflowByWorkflowIdWithResponse request returning *DeleteV0CityByCityNameWorkflowByWorkflowIdResponse
@@ -49165,6 +50150,484 @@ func ParseGetV0CityByCityNameWaitsResponse(rsp *http.Response) (*GetV0CityByCity
 			return nil, err
 		}
 		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseDeleteV0CityByCityNameWorkerClaimResponse parses an HTTP response from a DeleteV0CityByCityNameWorkerClaimWithResponse call
+func ParseDeleteV0CityByCityNameWorkerClaimResponse(rsp *http.Response) (*DeleteV0CityByCityNameWorkerClaimResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteV0CityByCityNameWorkerClaimResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WorkerReleaseOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON501 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameWorkerClaimResponse parses an HTTP response from a PostV0CityByCityNameWorkerClaimWithResponse call
+func ParsePostV0CityByCityNameWorkerClaimResponse(rsp *http.Response) (*PostV0CityByCityNameWorkerClaimResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameWorkerClaimResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WorkerClaimOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON501 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameWorkerCloseResponse parses an HTTP response from a PostV0CityByCityNameWorkerCloseWithResponse call
+func ParsePostV0CityByCityNameWorkerCloseResponse(rsp *http.Response) (*PostV0CityByCityNameWorkerCloseResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameWorkerCloseResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest OKResponseBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameWorkerCommentResponse parses an HTTP response from a PostV0CityByCityNameWorkerCommentWithResponse call
+func ParsePostV0CityByCityNameWorkerCommentResponse(rsp *http.Response) (*PostV0CityByCityNameWorkerCommentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameWorkerCommentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest OKResponseBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON501 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseGetV0CityByCityNameWorkerCurrentResponse parses an HTTP response from a GetV0CityByCityNameWorkerCurrentWithResponse call
+func ParseGetV0CityByCityNameWorkerCurrentResponse(rsp *http.Response) (*GetV0CityByCityNameWorkerCurrentResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetV0CityByCityNameWorkerCurrentResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WorkerCurrentOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameWorkerDrainAckResponse parses an HTTP response from a PostV0CityByCityNameWorkerDrainAckWithResponse call
+func ParsePostV0CityByCityNameWorkerDrainAckResponse(rsp *http.Response) (*PostV0CityByCityNameWorkerDrainAckResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameWorkerDrainAckResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WorkerDrainAckOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON501 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
 		var dest ErrorModel

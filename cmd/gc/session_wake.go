@@ -232,11 +232,16 @@ func pendingDrainReasonCancelable(reason string) bool {
 }
 
 const (
-	reconcilerDrainAckSourceKey     = "GC_DRAIN_ACK_SOURCE"
+	// The key names are the cross-process drain contract and are declared once
+	// in internal/runtime, next to the provider metadata surface that carries
+	// them, so the API's worker drain-ack route acknowledges with the same keys
+	// this path writes rather than a lookalike set.
+	reconcilerDrainAckKey           = runtime.DrainAckMetaKey
+	reconcilerDrainAckSourceKey     = runtime.DrainAckSourceMetaKey
 	reconcilerDrainAckSourceValue   = "reconciler"
-	drainAckSourceAgentValue        = "agent"
-	reconcilerDrainAckReasonKey     = "GC_DRAIN_REASON"
-	reconcilerDrainAckGenerationKey = "GC_DRAIN_GENERATION"
+	drainAckSourceAgentValue        = runtime.DrainAckSourceAgent
+	reconcilerDrainAckReasonKey     = runtime.DrainReasonMetaKey
+	reconcilerDrainAckGenerationKey = runtime.DrainGenerationMetaKey
 )
 
 func setReconcilerDrainAckMetadata(sp runtime.Provider, name string, ds *drainState) error {
@@ -254,7 +259,7 @@ func setReconcilerDrainAckMetadata(sp runtime.Provider, name string, ds *drainSt
 		_ = clearReconcilerDrainAckMetadata(sp, name)
 		return err
 	}
-	if err := sp.SetMeta(name, "GC_DRAIN_ACK", "1"); err != nil {
+	if err := sp.SetMeta(name, reconcilerDrainAckKey, "1"); err != nil {
 		_ = clearReconcilerDrainAckMetadata(sp, name)
 		return err
 	}
@@ -266,7 +271,7 @@ func clearReconcilerDrainAckMetadata(sp runtime.Provider, name string) error {
 		return fmt.Errorf("session provider is nil")
 	}
 	var errs []error
-	for _, key := range []string{"GC_DRAIN_ACK", reconcilerDrainAckSourceKey, reconcilerDrainAckReasonKey, reconcilerDrainAckGenerationKey} {
+	for _, key := range []string{reconcilerDrainAckKey, reconcilerDrainAckSourceKey, reconcilerDrainAckReasonKey, reconcilerDrainAckGenerationKey} {
 		if err := sp.RemoveMeta(name, key); err != nil {
 			log.Printf("session wake: clearing reconciler drain ack metadata %s for %s: %v", key, name, err)
 			errs = append(errs, fmt.Errorf("removing %s: %w", key, err))
@@ -460,7 +465,7 @@ func staleOrLegacyDrainAckBeforeStart(session beads.Bead, sp runtime.Provider, n
 	if err == nil && source == reconcilerDrainAckSourceValue {
 		return staleReconcilerDrainAck(session, sp, name)
 	}
-	acked, err := sp.GetMeta(name, "GC_DRAIN_ACK")
+	acked, err := sp.GetMeta(name, reconcilerDrainAckKey)
 	return err == nil && acked == "1"
 }
 
@@ -479,7 +484,7 @@ func staleOrLegacyDrainAckBeforeStartInfo(info sessions.Info, sp runtime.Provide
 	if err == nil && source == reconcilerDrainAckSourceValue {
 		return staleReconcilerDrainAckInfo(info, sp, name)
 	}
-	acked, err := sp.GetMeta(name, "GC_DRAIN_ACK")
+	acked, err := sp.GetMeta(name, reconcilerDrainAckKey)
 	return err == nil && acked == "1"
 }
 
@@ -654,8 +659,8 @@ func advanceSessionDrainsWithSessionsTraced(
 				fields["template"] = normalizedSessionTemplateInfo(info, cfg)
 				fields["before"] = ""
 				fields["after"] = "1"
-				fields["field"] = "GC_DRAIN_ACK"
-				trace.RecordMutation(TraceSiteMutationRuntimeMeta, TraceReasonUnknown, outcome, "provider_meta", name, "GC_DRAIN_ACK", fields)
+				fields["field"] = reconcilerDrainAckKey
+				trace.RecordMutation(TraceSiteMutationRuntimeMeta, TraceReasonUnknown, outcome, "provider_meta", name, reconcilerDrainAckKey, fields)
 			}
 		}
 

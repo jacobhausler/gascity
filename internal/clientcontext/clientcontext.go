@@ -44,6 +44,13 @@ type Context struct {
 	CredentialOrg            string   `toml:"credential_org,omitempty"`
 	GrantCommand             string   `toml:"grant_command,omitempty"`
 	CAFile                   string   `toml:"ca_file,omitempty"`
+	// ClientCertFile/ClientKeyFile configure a TLS CLIENT certificate (mTLS).
+	// They are a transport-layer identity, orthogonal to the two credential
+	// techniques above: a relay that terminates TLS with
+	// `client_auth require_and_verify` authenticates the caller by certificate
+	// before any bearer or grant is even parsed. Both must be set together.
+	ClientCertFile           string   `toml:"client_cert_file,omitempty"`
+	ClientKeyFile            string   `toml:"client_key_file,omitempty"`
 	TLSServerName            string   `toml:"tls_server_name,omitempty"`
 	InsecureSkipVerify       bool     `toml:"insecure_skip_verify,omitempty"`
 	Timeout                  string   `toml:"timeout,omitempty"` // REST overall timeout; never applied to SSE streams
@@ -177,6 +184,9 @@ func (c Context) Validate() error {
 		}
 	} else if c.CredentialOrg != "" {
 		return fmt.Errorf("context %q: credential_org requires credential_audience and credential_required_scopes", c.Name)
+	}
+	if (c.ClientCertFile == "") != (c.ClientKeyFile == "") {
+		return fmt.Errorf("context %q: client_cert_file and client_key_file must be set together", c.Name)
 	}
 	return nil
 }

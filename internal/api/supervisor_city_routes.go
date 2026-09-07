@@ -409,6 +409,21 @@ func (sm *SupervisorMux) registerCityRoutes() {
 	cityGet(sm, "/session/{id}/agents", (*Server).humaHandleSessionAgentList, errorStatuses(http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable))
 	cityGet(sm, "/session/{id}/agents/{agentId}", (*Server).humaHandleSessionAgentGet, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable))
 
+	// Worker. The operations a session performs on its own behalf, so a session
+	// whose box is not the controller's host can still do a worker's job. Each
+	// delegates to an existing store primitive (Claim / ReleaseIfCurrent /
+	// Close / the comment log) rather than reimplementing its semantics.
+	//
+	// The prefix is /worker, not /hook: /v0/city/{cityName}/hook/ is the
+	// inbound webhook receiver, deliberately outside the typed layer so it can
+	// verify a raw body (supervisor.go, and supervisor_nonhuma_guard_test.go).
+	cityPost(sm, "/worker/claim", (*Server).humaHandleWorkerClaim, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusNotImplemented, http.StatusServiceUnavailable))
+	cityDelete(sm, "/worker/claim", (*Server).humaHandleWorkerRelease, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented, http.StatusServiceUnavailable))
+	cityGet(sm, "/worker/current", (*Server).humaHandleWorkerCurrent, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
+	cityPost(sm, "/worker/drain-ack", (*Server).humaHandleWorkerDrainAck, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented, http.StatusServiceUnavailable))
+	cityPost(sm, "/worker/close", (*Server).humaHandleWorkerClose, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable))
+	cityPost(sm, "/worker/comment", (*Server).humaHandleWorkerComment, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented, http.StatusServiceUnavailable))
+
 	// Durable session waits (session coordination-class).
 	cityGet(sm, "/waits", (*Server).humaHandleWaitList, errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable))
 	cityGet(sm, "/wait/{id}", (*Server).humaHandleWaitGet, errorStatuses(http.StatusNotFound, http.StatusServiceUnavailable))

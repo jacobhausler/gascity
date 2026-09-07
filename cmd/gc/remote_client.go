@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/gastownhall/gascity/internal/api"
@@ -30,6 +31,8 @@ func remoteClientOptions(target *remoteTarget) (api.RemoteOptions, error) {
 		opts.CAFile = ctx.CAFile
 		opts.TLSServerName = ctx.TLSServerName
 		opts.InsecureSkipVerify = ctx.InsecureSkipVerify
+		opts.ClientCertFile = ctx.ClientCertFile
+		opts.ClientKeyFile = ctx.ClientKeyFile
 		if ctx.Timeout != "" {
 			d, err := time.ParseDuration(ctx.Timeout)
 			if err != nil {
@@ -80,6 +83,15 @@ func remoteClientOptions(target *remoteTarget) (api.RemoteOptions, error) {
 				return cs.RefreshContext(ctx)
 			}
 		}
+	}
+	if target.Ctx == nil {
+		// Ad-hoc --city-url/GC_CITY_URL targets carry no context, so their TLS
+		// material comes from the environment — the same tier that already
+		// supplies their bearer (GC_CITY_URL_TOKEN). A named context is
+		// authoritative and is never overridden by these.
+		opts.CAFile = os.Getenv("GC_CITY_CA")
+		opts.ClientCertFile = os.Getenv("GC_CITY_CLIENT_CERT")
+		opts.ClientKeyFile = os.Getenv("GC_CITY_CLIENT_KEY")
 	}
 	if target.Token != "" {
 		tok := target.Token

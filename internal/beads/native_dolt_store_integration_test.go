@@ -418,3 +418,71 @@ func assertSameJSON(t *testing.T, got, want string) {
 		t.Fatalf("payload = %q, want the JSON value of %q", got, want)
 	}
 }
+
+// TestNativeDoltStoreClaimAndCommentAgainstRealDolt exercises the worker
+// capability seam — the same Claim/Comment methods beads.ClaimFor and
+// beads.CommentOn discover — against a real scratch Dolt rather than the
+// in-memory storage fixture. The in-process suite pins the semantics; this
+// pins that they hold on the backend a rig-backed city actually resolves,
+// which is exactly the gap that let /worker/claim answer 501 in production.
+func TestNativeDoltStoreClaimAndCommentAgainstRealDolt(t *testing.T) {
+	ctx := context.Background()
+	storage, err := beadslib.OpenBestAvailable(ctx, filepath.Join(t.TempDir(), ".beads"))
+	if err != nil {
+		t.Skipf("upstream native beads storage unavailable: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := storage.Close(); err != nil {
+			t.Fatalf("close upstream storage: %v", err)
+		}
+	})
+	if err := storage.SetConfig(ctx, "issue_prefix", "gc"); err != nil {
+		t.Fatalf("set issue prefix: %v", err)
+	}
+	store := newNativeDoltStoreWithStorageAndPrefix(storage, "worker-capability", "gc")
+
+	bead, err := store.Create(Bead{Title: "claimable work"})
+	if err != nil {
+		t.Fatalf("Create bead: %v", err)
+	}
+
+	claimed, ok, err := ClaimFor(store, bead.ID, "worker-1")
+	if err != nil || !ok {
+		t.Fatalf("ClaimFor: ok=%v err=%v", ok, err)
+	}
+	if claimed.Assignee != "worker-1" || claimed.Status != "in_progress" {
+		t.Fatalf("claimed = %+v, want assignee worker-1 in_progress", claimed)
+	}
+
+	// Single winner, pointer-scoped: a second assignee loses without an error.
+	lost, ok, err := ClaimFor(store, bead.ID, "worker-2")
+	if err != nil {
+		t.Fatalf("a lost claim must not be an error: %v", err)
+	}
+	if ok || lost.ID != "" {
+		t.Fatalf("second claimant won: ok=%v bead=%+v", ok, lost)
+	}
+
+	// The holder's own reclaim stays idempotent.
+	if _, ok, err := ClaimFor(store, bead.ID, "worker-1"); err != nil || !ok {
+		t.Fatalf("holder reclaim: ok=%v err=%v", ok, err)
+	}
+
+	if err := CommentOn(store, bead.ID, "claimed from alloc"); err != nil {
+		t.Fatalf("CommentOn: %v", err)
+	}
+	comments, err := storage.GetIssueComments(ctx, bead.ID)
+	if err != nil {
+		t.Fatalf("GetIssueComments: %v", err)
+	}
+	if len(comments) != 1 || comments[0].Text != "claimed from alloc" {
+		t.Fatalf("comments = %+v, want one carrying the appended text", comments)
+	}
+
+	if _, _, err := ClaimFor(store, "gc-missing", "worker-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("claim of a missing bead = %v, want ErrNotFound", err)
+	}
+	if err := CommentOn(store, "gc-missing", "note"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("comment on a missing bead = %v, want ErrNotFound", err)
+	}
+}

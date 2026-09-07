@@ -766,3 +766,46 @@ func (m *MemStore) DepListBatch(ids []string) (map[string][]Dep, error) {
 	}
 	return result, nil
 }
+
+// Claim atomically claims a bead for assignee. It is the acquire-dual of
+// [MemStore.ReleaseIfCurrent] and implements the same contract SQLiteStore.Claim
+// states normatively: it succeeds only when the bead is open/in_progress and
+// currently unassigned, is idempotent when the same assignee already holds it,
+// returns ok=false (a conflict, not an error) when a different assignee holds
+// it or it is closed, and ErrNotFound when the bead does not exist.
+//
+// Single-winner under concurrency comes from the store mutex, which is this
+// store's equivalent of the SQLite backend's single write connection: competing
+// claims serialize, and exactly one observes the bead unassigned.
+func (m *MemStore) Claim(id, assignee string) (Bead, bool, error) {
+	assignee = strings.TrimSpace(assignee)
+	if assignee == "" {
+		return Bead{}, false, fmt.Errorf("claiming bead %q: empty assignee", id)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	i := m.indexOfLocked(id)
+	if i < 0 {
+		return Bead{}, false, fmt.Errorf("claiming bead %q: %w", id, ErrNotFound)
+	}
+	b := m.beads[i]
+	if b.Status != "open" && b.Status != "in_progress" {
+		// Terminal and otherwise non-claimable states are never resurrected.
+		return Bead{}, false, nil
+	}
+	cur := strings.TrimSpace(b.Assignee)
+	if cur != "" && cur != assignee {
+		return Bead{}, false, nil
+	}
+	if cur == assignee && b.Status == "in_progress" {
+		// A same-owner reclaim is a true no-op: it consumes neither a revision
+		// nor an ownership fence, and returns the stored snapshot.
+		return cloneBead(b), true, nil
+	}
+	m.beads[i].Assignee = assignee
+	m.beads[i].Status = "in_progress"
+	m.beads[i].UpdatedAt = time.Now()
+	m.beads[i].Revision++
+	m.beads[i].ClaimFence++ // taking an owner is an ownership transition
+	return cloneBead(m.beads[i]), true, nil
+}

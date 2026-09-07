@@ -91,6 +91,8 @@ remote city name (defaults to <name>). At most one credential technique applies:
 	f.StringVar(&requiredScopesJSON, "credential-required-scopes", "", "JSON array of required credential scopes (provider mode)")
 	f.StringVar(&credentialOrg, "credential-org", "", "optional credential provider organization (provider mode)")
 	f.StringVar(&c.CAFile, "ca-file", "", "PEM CA bundle to verify the server certificate")
+	f.StringVar(&c.ClientCertFile, "client-cert-file", "", "PEM client certificate to present (mTLS); requires --client-key-file")
+	f.StringVar(&c.ClientKeyFile, "client-key-file", "", "PEM private key for --client-cert-file")
 	f.StringVar(&c.TLSServerName, "tls-server-name", "", "override the TLS SNI / certificate name")
 	f.BoolVar(&c.InsecureSkipVerify, "insecure-skip-verify", false, "skip TLS verification (dev only)")
 	f.StringVar(&c.Timeout, "timeout", "", "REST request timeout, e.g. 120s (never applied to SSE streams)")
@@ -314,6 +316,12 @@ func doContextShow(name string, jsonOut bool, stdout, stderr io.Writer) int {
 	fmt.Fprintf(tw, "credential:\t%s\n", credLabel(*c)) //nolint:errcheck
 	if c.CAFile != "" {
 		fmt.Fprintf(tw, "ca_file:\t%s\n", c.CAFile) //nolint:errcheck
+	}
+	if c.ClientCertFile != "" {
+		fmt.Fprintf(tw, "client_cert_file:\t%s\n", c.ClientCertFile) //nolint:errcheck
+	}
+	if c.ClientKeyFile != "" {
+		fmt.Fprintf(tw, "client_key_file:\t%s\n", c.ClientKeyFile) //nolint:errcheck
 	}
 	if c.TLSServerName != "" {
 		fmt.Fprintf(tw, "tls_server_name:\t%s\n", c.TLSServerName) //nolint:errcheck

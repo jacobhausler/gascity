@@ -316,6 +316,7 @@ func bdRigQualifiedMetadataRefusal(cfg *config.City, bdArgs []string) (string, b
 
 func doBd(args []string, stdout, stderr io.Writer) int {
 	cityName, rigName, bdArgs := extractBdScopeFlags(args)
+	cityURLArg, remoteCityNameArg, bdArgs := extractBdRemoteFlags(bdArgs)
 
 	bdArgs, err := rewriteBdHeartbeatArgs(bdArgs)
 	if err != nil {
@@ -328,6 +329,28 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 	if msg, mistyped := mistypedMetadataPairRefusal(bdArgs); mistyped {
 		fmt.Fprint(stderr, msg) //nolint:errcheck // best-effort stderr
 		return 1
+	}
+
+	// Remote leg, for the worker subset only. It runs before resolveBdCity
+	// because that resolves a city on disk and refuses a remote target
+	// outright. An explicit --city names a LOCAL city by path or name and is
+	// never a remote target, so it takes the local path unchanged.
+	if strings.TrimSpace(cityName) == "" {
+		restore := applyBdRemoteSelection(cityURLArg, remoteCityNameArg)
+		client, isRemote, rerr := resolveWorkerTarget()
+		restore()
+		if rerr != nil {
+			fmt.Fprintf(stderr, "gc bd: %v\n", rerr) //nolint:errcheck // best-effort stderr
+			return 1
+		}
+		if isRemote {
+			if code, handled := remoteBd(client, bdArgs, stdout, stderr); handled {
+				return code
+			}
+			fmt.Fprintf(stderr, "gc bd: %v\n", errRemoteNotSupportedYet())                                                        //nolint:errcheck // best-effort stderr
+			fmt.Fprintln(stderr, "  hint: against a remote city, gc bd supports the worker subset: show, update, comment, close") //nolint:errcheck
+			return 1
+		}
 	}
 
 	cityPath, err := resolveBdCity(cityName)
@@ -796,6 +819,63 @@ func extractBdScopeFlags(args []string) (string, string, []string) {
 		rigName = rigFlag
 	}
 	return cityName, rigName, rest
+}
+
+// extractBdRemoteFlags pulls the root's remote selectors — --city-url (and its
+// --api alias) and --city-name — out of a `gc bd` argument list, returning them
+// with the remaining bd args.
+//
+// `gc bd` sets DisableFlagParsing, so cobra never populates those persistent
+// flags for it. An in-alloc worker on the ad-hoc tier (GC_CITY_URL plus
+// --city-name) was therefore refused with "a remote --city-url/GC_CITY_URL
+// target requires --city-name" while `gc hook`, which parses flags normally,
+// worked from the very same environment — leaving a named context the only way
+// to reach `gc bd` remotely (DF-08 L2 gap 1).
+//
+// The flags are REMOVED from the args: they select the city gc talks to and
+// mean nothing to bd, which would reject them as unknown.
+func extractBdRemoteFlags(args []string) (cityURL, cityName string, rest []string) {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case (args[i] == "--city-url" || args[i] == "--api") && i+1 < len(args):
+			cityURL = args[i+1]
+			i++
+			continue
+		case strings.HasPrefix(args[i], "--city-url="):
+			cityURL = strings.TrimPrefix(args[i], "--city-url=")
+			continue
+		case strings.HasPrefix(args[i], "--api="):
+			cityURL = strings.TrimPrefix(args[i], "--api=")
+			continue
+		case args[i] == "--city-name" && i+1 < len(args):
+			cityName = args[i+1]
+			i++
+			continue
+		case strings.HasPrefix(args[i], "--city-name="):
+			cityName = strings.TrimPrefix(args[i], "--city-name=")
+			continue
+		}
+		rest = append(rest, args[i])
+	}
+	return cityURL, cityName, rest
+}
+
+// applyBdRemoteSelection publishes the selectors extracted from a `gc bd`
+// argument list on the root flag variables readRemoteSelection reads, and
+// returns the restore that puts the previous values back.
+//
+// It only ever sets, never clears: a root flag that cobra DID parse (as in
+// `gc --city-name mc bd show x`) stays in force when the passthrough carries
+// none of its own, so the two spellings agree.
+func applyBdRemoteSelection(cityURL, cityName string) func() {
+	prevURL, prevName := cityURLFlag, cityNameFlag
+	if strings.TrimSpace(cityURL) != "" {
+		cityURLFlag = cityURL
+	}
+	if strings.TrimSpace(cityName) != "" {
+		cityNameFlag = cityName
+	}
+	return func() { cityURLFlag, cityNameFlag = prevURL, prevName }
 }
 
 // extractRigFlag extracts --rig <name> from the argument list and returns

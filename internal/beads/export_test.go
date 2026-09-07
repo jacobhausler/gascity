@@ -6,6 +6,15 @@ func NewNativeDoltStoreForConformance() Store {
 	return newNativeDoltStoreForTest(newNativeDoltMemStorage())
 }
 
+// NewNativeDoltStoreWithCommentLog returns a NativeDoltStore over the in-memory
+// native storage fixture plus a reader for that fixture's comment log, so the
+// external worker-capability suite can assert an appended comment actually
+// landed instead of only that the call returned nil.
+func NewNativeDoltStoreWithCommentLog() (Store, func(id string) []string) {
+	storage := newNativeDoltMemStorage()
+	return newNativeDoltStoreForTest(storage), storage.commentsFor
+}
+
 // NotifyChangeForTest drives the real producer (CachingStore.notifyChange) with
 // a caller-supplied bead, bypassing the store-write path that rewrites ids and
 // status. It lets cross-package guardrail tests (e.g. the run-view round-trip)

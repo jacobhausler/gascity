@@ -38,6 +38,8 @@ type beadPolicyGraphStore struct {
 var (
 	_ beads.ConditionalAssignmentReleaser    = (*beadPolicyStore)(nil)
 	_ beads.ConditionalWritesResolveTargeter = (*beadPolicyStore)(nil)
+	_ beads.ActorClaimer                     = (*beadPolicyStore)(nil)
+	_ beads.Commenter                        = (*beadPolicyStore)(nil)
 )
 
 // ConditionalWritesResolveTarget declares the wrapped store as the
@@ -244,6 +246,35 @@ func (s *beadPolicyStore) ReleaseIfCurrent(id, expectedAssignee string) (bool, e
 		return false, beads.ErrConditionalReleaseUnsupported
 	}
 	return releaser.ReleaseIfCurrent(id, expectedAssignee)
+}
+
+// ClaimAs and Comment forward the two worker capabilities, for the same reason
+// Count and ReadyContext are forwarded: the embedded beads.Store interface
+// promotes only the methods IT declares, and neither the claim CAS nor the
+// comment log is one of them. Every store the controller serves is wrapped
+// here — the city store in openStoreResultAtForCityWithConfigAndBDContext, each
+// rig store in openRigStore, and both again after wrapWithCachingStore — so an
+// unforwarded capability is invisible to beads.ClaimFor/beads.CommentOn on the
+// WHOLE serving surface, and /worker/claim and /worker/comment answer 501 for a
+// bead the very same handler just read (DF-08 D1: reads and routing work, every
+// remote worker write fails).
+//
+// The claim is exposed in the ActorClaimer shape because that is the one that
+// survives delegation: beads.ClaimFor discovers AssigneeClaimer first, so a
+// wrapper that named its method Claim would take precedence over the backing
+// store's own discovery order rather than deferring to it. Both go through the
+// package's discovery helpers rather than a second type assertion, so a backing
+// store implementing either claim shape is reached and one implementing neither
+// still reports the named capability error instead of panicking.
+//
+// The policy layer shapes CREATION and READS; a claim and a comment are neither,
+// so nothing is rewritten on the way through.
+func (s *beadPolicyStore) ClaimAs(id, assignee string) (beads.Bead, bool, error) {
+	return beads.ClaimFor(s.Store, id, assignee)
+}
+
+func (s *beadPolicyStore) Comment(id, text string) error {
+	return beads.CommentOn(s.Store, id, text)
 }
 
 func (s *beadPolicyStore) policyForCreate(b beads.Bead) (string, string) {

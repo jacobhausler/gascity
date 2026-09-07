@@ -259,6 +259,25 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 		return 1
 	}
 
+	// Remote leg. Resolved before any city work because every step below —
+	// agent resolution, config load, the work query — reads a city from local
+	// disk, and a session whose box is not the controller's host has none.
+	// Only the claim protocol crosses the wire: a bare `gc hook` runs the
+	// agent's configured shell work_query against a local store, which is not a
+	// thing a remote city can be asked to do on the caller's behalf.
+	client, isRemote, err := resolveWorkerTarget()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc hook: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+	if isRemote {
+		if !opts.Claim {
+			fmt.Fprintln(stderr, "gc hook: a remote city (--city-url/--context) supports --claim only; the plain work query runs a locally configured shell command against a local store") //nolint:errcheck
+			return 1
+		}
+		return remoteHookClaim(client, opts, stdout, stderr)
+	}
+
 	agentName := os.Getenv("GC_ALIAS")
 	if agentName == "" {
 		agentName = os.Getenv("GC_AGENT")

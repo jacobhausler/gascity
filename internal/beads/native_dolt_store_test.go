@@ -17,6 +17,8 @@ import (
 	"time"
 
 	beadslib "github.com/steveyegge/beads"
+	"github.com/steveyegge/beads/beadserrors"
+	"github.com/steveyegge/beads/issueops"
 )
 
 func TestNativeDoltStoreCreateDelegatesToUpstreamStorage(t *testing.T) {
@@ -2796,10 +2798,23 @@ type nativeDoltMemStorage struct {
 	beadslib.Storage
 	store *MemStore
 	txMu  sync.Mutex
+
+	// commentsMu guards comments, the fixture's stand-in for the backend's
+	// append-only comment log. It is recorded rather than discarded so a test
+	// can assert that a comment actually landed. Like the real backend's, the
+	// log lives outside the issue transaction and is not rolled back with it.
+	commentsMu sync.Mutex
+	comments   map[string][]string
 }
 
 func newNativeDoltMemStorage() *nativeDoltMemStorage {
-	return &nativeDoltMemStorage{store: NewMemStore()}
+	return &nativeDoltMemStorage{store: NewMemStore(), comments: map[string][]string{}}
+}
+
+func (s *nativeDoltMemStorage) commentsFor(id string) []string {
+	s.commentsMu.Lock()
+	defer s.commentsMu.Unlock()
+	return append([]string(nil), s.comments[id]...)
 }
 
 func (s *nativeDoltMemStorage) RunInTransaction(_ context.Context, _ string, fn func(beadslib.Transaction) error) error {
@@ -3062,6 +3077,37 @@ func (s *nativeDoltMemStorage) GetConfig(context.Context, string) (string, error
 
 func (s *nativeDoltMemStorage) AddComment(context.Context, string, string, string) error {
 	return nil
+}
+
+// Commenter stands in for the backend's add-comment role, which is the surface
+// NativeDoltStore.Comment writes through (its transaction has no AddComment).
+// It enforces the two refusals the upstream contract states — a blank body and
+// an id naming no issue are both ErrValidation/ErrNotFound rather than a
+// silent no-op — so the in-process suite cannot pass on a store that skipped
+// them.
+func (s *nativeDoltMemStorage) Commenter() (issueops.Commenter, error) {
+	return nativeDoltMemCommenter{storage: s}, nil
+}
+
+type nativeDoltMemCommenter struct{ storage *nativeDoltMemStorage }
+
+func (c nativeDoltMemCommenter) AddComment(_ context.Context, req issueops.AddCommentRequest) (issueops.AddCommentResult, error) {
+	if strings.TrimSpace(req.Text) == "" || strings.TrimSpace(req.IssueID) == "" {
+		return issueops.AddCommentResult{}, beadserrors.ErrValidation
+	}
+	if _, err := c.storage.store.Get(req.IssueID); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return issueops.AddCommentResult{}, beadserrors.ErrNotFound
+		}
+		return issueops.AddCommentResult{}, err
+	}
+	c.storage.commentsMu.Lock()
+	defer c.storage.commentsMu.Unlock()
+	if c.storage.comments == nil {
+		c.storage.comments = map[string][]string{}
+	}
+	c.storage.comments[req.IssueID] = append(c.storage.comments[req.IssueID], req.Author+": "+req.Text)
+	return issueops.AddCommentResult{Comment: &beadslib.Comment{Text: req.Text, Author: req.Author}}, nil
 }
 
 func (s *nativeDoltMemStorage) ImportIssueComment(context.Context, string, string, string, time.Time) (*beadslib.Comment, error) {

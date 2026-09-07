@@ -102,7 +102,7 @@ func (o *providerDrainOps) setDrainAck(sessionName string) error {
 		o.sp.RemoveMeta(sessionName, reconcilerDrainAckReasonKey),
 		o.sp.RemoveMeta(sessionName, reconcilerDrainAckGenerationKey),
 		o.sp.SetMeta(sessionName, reconcilerDrainAckSourceKey, drainAckSourceAgentValue),
-		o.sp.SetMeta(sessionName, "GC_DRAIN_ACK", "1"),
+		o.sp.SetMeta(sessionName, reconcilerDrainAckKey, "1"),
 	)
 }
 

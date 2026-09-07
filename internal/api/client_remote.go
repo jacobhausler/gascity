@@ -84,6 +84,12 @@ type RemoteOptions struct {
 	// TLSServerName overrides the SNI / certificate name (for a host reached by
 	// IP or through a fronting name).
 	TLSServerName string
+	// ClientCertFile/ClientKeyFile present a TLS client certificate (mTLS) to
+	// the remote terminus. Empty presents none. Both must be set together; the
+	// pair is loaded once at client construction so a bad pair is a hard
+	// construction error rather than a per-request surprise.
+	ClientCertFile string
+	ClientKeyFile  string
 	// InsecureSkipVerify disables TLS verification (development only).
 	InsecureSkipVerify bool
 	// RESTTimeout overrides the overall REST timeout; 0 uses remoteRESTTimeout.
@@ -402,6 +408,16 @@ func remoteTLSConfig(opts RemoteOptions) (*tls.Config, error) {
 			return nil, fmt.Errorf("ca_file %q: no valid PEM certificates found", opts.CAFile)
 		}
 		cfg.RootCAs = pool
+	}
+	if (opts.ClientCertFile == "") != (opts.ClientKeyFile == "") {
+		return nil, fmt.Errorf("client_cert_file and client_key_file must be set together")
+	}
+	if opts.ClientCertFile != "" {
+		cert, err := tls.LoadX509KeyPair(opts.ClientCertFile, opts.ClientKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("loading client certificate %q: %w", opts.ClientCertFile, err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
 	}
 	return cfg, nil
 }

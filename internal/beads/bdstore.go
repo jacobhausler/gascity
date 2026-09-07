@@ -1724,7 +1724,26 @@ func bdSQLStringLiteral(value string) string {
 // The caller controls the claim actor through the store's CommandRunner
 // environment, typically BEADS_ACTOR.
 func (s *BdStore) Claim(id string) (Bead, bool, error) {
-	out, err := s.runBDTransientWriteOutput("update", id, "--claim", "--json")
+	return s.claim(id, "")
+}
+
+// ClaimAs is Claim with the claim actor named explicitly rather than inherited
+// from the store's CommandRunner environment. It exists because a claim made
+// on someone else's behalf — a server handling a request from the session that
+// will hold the bead — cannot express the claimant through a process-wide
+// BEADS_ACTOR the way an in-session `bd` invocation can. The compare-and-swap
+// is bd's own `update --claim`, identical to Claim's; only the actor differs.
+// An empty assignee is the same call as Claim.
+func (s *BdStore) ClaimAs(id, assignee string) (Bead, bool, error) {
+	return s.claim(id, assignee)
+}
+
+func (s *BdStore) claim(id, assignee string) (Bead, bool, error) {
+	args := []string{"update", id, "--claim", "--json"}
+	if strings.TrimSpace(assignee) != "" {
+		args = append(args, "--actor", assignee)
+	}
+	out, err := s.runBDTransientWriteOutput(args...)
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if isBdClaimConflictMessage(msg) || isBdClaimConflictMessage(err.Error()) {

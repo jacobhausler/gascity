@@ -55,6 +55,17 @@ func cmdHookCurrent(idOnly bool, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "gc hook current: no session identity (set $GC_SESSION_ID); only a session that claimed work has a current bead") //nolint:errcheck
 		return 1
 	}
+	// A remote city answers the same question over the API. Resolved before the
+	// local front door because opening that door resolves a city on disk, which
+	// a box running off the controller's host does not have.
+	client, isRemote, err := resolveWorkerTarget()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc hook current: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if isRemote {
+		return remoteHookCurrent(client, sessionID, idOnly, stdout, stderr)
+	}
 	sessFront, err := hookCurrentSessionFrontDoor()
 	if err != nil {
 		fmt.Fprintf(stderr, "gc hook current: %v\n", err) //nolint:errcheck
