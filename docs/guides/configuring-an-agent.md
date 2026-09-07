@@ -210,14 +210,47 @@ session  = "acp"        # drive over ACP instead of tmux
 
 ## Axis 5 — Runtime (where it runs)
 
-The runtime is *where* the session's box lives. It is selected city-wide via the
-`[session]` block (or the `GC_SESSION` environment variable), not per-agent:
+The runtime is *where* the session's box lives. The city-wide default is the
+`[session]` block:
 
 ```toml
 # city.toml
 [session]
 provider = "k8s"        # run every session in a Kubernetes pod
 ```
+
+A single agent — or a whole rig — can run somewhere else with
+`runtime_provider`, which takes the same selection names:
+
+```toml
+# agents/reviewer/agent.toml
+runtime_provider = "ssh:builder@buildbox"   # this agent only
+
+# city.toml — the same thing as a patch, without editing the pack
+[[patches.agent]]
+name = "reviewer"
+rig  = "tools"
+runtime_provider = "ssh:builder@buildbox"
+
+[[rigs]]
+name = "tools"
+runtime_provider = "subprocess"   # default for agents in this rig
+```
+
+Resolution order: agent `runtime_provider` → rig `runtime_provider` →
+`[session] provider` → the default runtime. When none is set, nothing changes.
+
+The resolved runtime is **stamped on the session record when the session is
+created**, and every later operation on that session — stop, peek, nudge,
+status, reload, cleanup — routes to the stamped runtime even if configuration
+changed in between. A runtime change cannot migrate a live session in place:
+drain it and let it be recreated on the new runtime. If a stamped runtime cannot
+be resolved (its pack is gone, say), operations on that session fail rather than
+falling back to the city default, which would act on a different box.
+
+`GC_SESSION` remains an explicit whole-city override for operations and CI: when
+it is set, every session runs where it says, and lane-scoped routing is off. Do
+not use it to run one lane elsewhere.
 
 Built-in runtime backends: `tmux` (local, default), `subprocess` (local,
 headless), `k8s` (pods), `ssh:user@host` (a remote box over SSH), and

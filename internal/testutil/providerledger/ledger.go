@@ -145,6 +145,7 @@ type Entry struct {
 // Catalog returns fresh entries from the checked runtime-provider ledger.
 func Catalog() []Entry {
 	autoConstructor := repoSymbol("internal/runtime/auto", "New")
+	routerConstructor := repoSymbol("internal/runtime/router", "New")
 	return []Entry{
 		reusableBuiltin(
 			"fake", "exact:fake", repoSymbol("internal/runtime", "Fake"),
@@ -263,6 +264,26 @@ func Catalog() []Entry {
 				"the existing full conformance run skips when the tmux executable is absent",
 			),
 		),
+		{
+			ID:           "runtime.composition.router",
+			Roles:        []Role{RoleProductionProvider},
+			Port:         PortRuntimeProvider,
+			Constructors: []SymbolRef{routerConstructor},
+			Source: &SourceRef{
+				File:     "cmd/gc/runtime_routing.go",
+				Function: "composeLaneRuntimeProvider",
+				Reason:   "conditional lane-scoped runtime composition is outside the runtime registry",
+			},
+			Claims: []ContractClaim{provedRuntimeScoped(
+				routerConstructor,
+				"internal/runtime/router/router_test.go",
+				"TestRouterConformance",
+				"default-route conformance; routed lanes covered by focused router routing tests",
+				SymbolRef{ImportPath: "fmt", Name: "Sprintf"},
+				repoSymbol("internal/runtime", "NewFake"),
+				SymbolRef{ImportPath: "sync/atomic", Name: "AddInt64"},
+			)},
+		},
 		{
 			ID:           "runtime.composition.auto",
 			Roles:        []Role{RoleProductionProvider},

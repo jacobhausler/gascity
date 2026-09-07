@@ -1475,6 +1475,7 @@ source of truth.
 | Seam | Implementations | Lifecycle deps | Coordination tested? |
 |---|---|---|---|
 | **Runtime** (`runtime.Provider`) | See checked runtime ledger above | None (stateless start/stop) | Via lifecycle start order test |
+| **Runtime composition** (`runtime.Provider` routers) | `internal/runtime/auto` (transport), `internal/runtime/router` (lane-scoped runtime), `internal/runtime/hybrid` | Routes must be registered before the first op on a session | No — `TestAutoConformance` / `TestRouterConformance` plus focused routing tests |
 | **Beads** (`beads.Store`) | See shared-suite callers above; production selection includes NativeDoltStore and BdStore | ensure-ready → init → hooks | `TestLifecycleCoordination_*` |
 | **Mail** (`mail.Provider`) | beadmail, exec, Fake | Depends on beads store | No — not a lifecycle seam; conformance sufficient |
 | **Events** (`events.Provider`) | FileRecorder, exec, Fake | None | No — provider conformance covers record, query, and watch behavior |

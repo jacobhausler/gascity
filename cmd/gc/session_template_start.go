@@ -147,6 +147,11 @@ func materializeSessionForTemplateWithOptions(
 		for k, v := range opts.materializeMetadata {
 			extraMeta[k] = v
 		}
+		// Stamp and route together: the session must reach its own backend from
+		// the create below onward, not from the next reconciler pass.
+		laneRuntime := config.AgentRuntimeProviderOverrideValue(cfg, spec.Agent)
+		stampLaneRuntimeMetadata(extraMeta, laneRuntime)
+		routeLaneRuntime(sp, spec.SessionName, laneRuntime)
 		if family := resolvedProviderFamilyMetadata(resolved); family != "" {
 			extraMeta["provider_kind"] = family
 		}
@@ -311,6 +316,10 @@ func materializeSessionForAgentConfig(cityPath string, cfg *config.City, store b
 		"agent_name":     sessionQualifiedName,
 		"session_origin": "manual",
 	}
+	// Stamp and route together (see the named-session path above).
+	laneRuntime := config.AgentRuntimeProviderOverrideValue(cfg, agentCfg)
+	stampLaneRuntimeMetadata(extraMeta, laneRuntime)
+	routeLaneRuntime(sp, explicitName, laneRuntime)
 	if family := resolvedProviderFamilyMetadata(resolved); family != "" {
 		extraMeta["provider_kind"] = family
 	}

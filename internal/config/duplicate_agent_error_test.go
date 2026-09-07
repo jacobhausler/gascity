@@ -204,7 +204,7 @@ func TestApplyAgentOverride_PreservesSource(t *testing.T) {
 	strVal := func(s string) *string { return &s }
 	agent := Agent{Name: "polecat", source: sourceInline}
 	override := AgentOverride{Agent: "polecat", PromptTemplate: strVal("prompts/p.md")}
-	applyAgentOverride(&agent, &override)
+	applyAgentOverride(&agent, &override, "")
 	if agent.source != sourceInline {
 		t.Errorf("agent.source after override = %v, want sourceInline (preserved)", agent.source)
 	}

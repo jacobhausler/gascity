@@ -35,16 +35,19 @@ func infoFromPersistedBeadFrozen(b beads.Bead) Info {
 	}
 
 	info := Info{
-		ID:            b.ID,
-		Type:          b.Type,
-		Template:      b.Metadata["template"],
-		State:         state,
-		Closed:        closed,
-		Title:         b.Title,
-		Alias:         b.Metadata["alias"],
-		AgentName:     b.Metadata["agent_name"],
-		Provider:      b.Metadata["provider"],
-		Transport:     transportFromMetadata(b),
+		ID:        b.ID,
+		Type:      b.Type,
+		Template:  b.Metadata["template"],
+		State:     state,
+		Closed:    closed,
+		Title:     b.Title,
+		Alias:     b.Metadata["alias"],
+		AgentName: b.Metadata["agent_name"],
+		Provider:  b.Metadata["provider"],
+		Transport: transportFromMetadata(b),
+
+		RuntimeProvider: b.Metadata[RuntimeProviderMetadataKey],
+
 		Command:       b.Metadata["command"],
 		WorkDir:       b.Metadata["work_dir"],
 		SessionName:   sessName,
@@ -197,6 +200,8 @@ func TestInfoCodecProjectionParity(t *testing.T) {
 		{"provider": "acp", "transport": ""},    // explicit empty transport, provider fallback
 		{"provider": "claude", "transport": ""}, // no fallback -> transport ""
 		{"session_name": ""},                    // sessionNameFor fallback
+		{RuntimeProviderMetadataKey: "sandbox"}, // stamped lane-scoped runtime
+		{RuntimeProviderMetadataKey: ""},        // explicit empty stamp
 	}
 	for i, m := range edgeMeta {
 		beadsToCheck = append(beadsToCheck,

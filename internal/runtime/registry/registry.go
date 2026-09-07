@@ -147,6 +147,28 @@ func (r *Registry) Clone() *Registry {
 	return c
 }
 
+// Resolves reports whether a selection name is matched by an explicit
+// registration — an exact name or a registered prefix — as opposed to landing
+// on the fallback.
+//
+// Callers that must not silently accept an undeclared runtime use this instead
+// of [Registry.New]: New resolves an unknown name through the tmux fallback
+// (RUNTIME-SEL-006), which is the right answer for a city-wide selection but
+// the wrong one for a session recorded as running somewhere specific.
+func (r *Registry) Resolves(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.exact[name]; ok {
+		return true
+	}
+	for prefix := range r.prefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // Has reports whether an exact selection name is registered.
 func (r *Registry) Has(name string) bool {
 	r.mu.RLock()

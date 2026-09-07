@@ -35,6 +35,7 @@ func TestAgentFieldSync(t *testing.T) {
 		"MinActiveSessions":            "cap field, inherits from rig/workspace — not a patch concern",
 		"ScaleCheck":                   "agent-specific scaling, derived from pool config — not a patch concern",
 		"SourceDir":                    "runtime-only, set during pack/fragment loading",
+		"RigName":                      "runtime-only owning-rig provenance, stamped when a rig override is applied; not a patch surface",
 		"InheritedProvider":            "runtime-only, derived from imported pack [agent_defaults]",
 		"InheritedDefaultSlingFormula": "runtime-only, derived from imported pack [agent_defaults]",
 		"InheritedAppendFragments":     "runtime-only, derived from imported pack [agent_defaults]",
@@ -181,6 +182,7 @@ func TestApplyAgentPatchCoversAllFields(t *testing.T) {
 		PromptTemplate:          strVal("prompts/test.md"),
 		Session:                 strVal("acp"),
 		Provider:                strVal("claude"),
+		RuntimeProvider:         strVal("subprocess"),
 		Upstream:                strVal("bedrock"),
 		Args:                    Fragments("--custom-arg"),
 		StartCommand:            strVal("claude --dangerously"),
@@ -337,6 +339,7 @@ func TestApplyAgentOverrideCoversAllFields(t *testing.T) {
 		PromptTemplate:          strVal("prompts/test.md"),
 		Session:                 strVal("acp"),
 		Provider:                strVal("claude"),
+		RuntimeProvider:         strVal("subprocess"),
 		Upstream:                strVal("bedrock"),
 		Args:                    Fragments("--custom-arg"),
 		StartCommand:            strVal("claude --dangerously"),
@@ -388,7 +391,7 @@ func TestApplyAgentOverrideCoversAllFields(t *testing.T) {
 
 	// Apply the override to a zero-valued agent.
 	agent := Agent{Env: map[string]string{"REMOVE_ME": "gone"}}
-	applyAgentOverride(&agent, &override)
+	applyAgentOverride(&agent, &override, "")
 
 	// "Agent" is the targeting key, not applied to the agent.
 	targeting := map[string]bool{"Agent": true}

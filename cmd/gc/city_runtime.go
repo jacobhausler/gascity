@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,7 +29,6 @@ import (
 	"github.com/gastownhall/gascity/internal/nudgequeue"
 	"github.com/gastownhall/gascity/internal/orders"
 	"github.com/gastownhall/gascity/internal/runtime"
-	sessionauto "github.com/gastownhall/gascity/internal/runtime/auto"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/storeref"
 	"github.com/gastownhall/gascity/internal/supervisor"
@@ -2083,11 +2083,20 @@ func (cr *CityRuntime) reloadConfigTraced(
 	if v := os.Getenv("GC_SESSION"); v != "" {
 		newProviderName = v
 	}
-	if newProviderName != *lastProviderName || packRuntimeDeclarationChanged(cr.cfg, nextCfg, newProviderName) {
+	// A changed set of lane-scoped runtimes needs the same rebuild: the runtime
+	// router is composed at construction, so a newly added (or removed)
+	// per-agent/per-rig runtime_provider would otherwise not reach live session
+	// ops until a controller restart. Sessions already stamped keep routing to
+	// their own backend across the rebuild — the routes are re-seeded from the
+	// session records, not from the new config.
+	laneRuntimesChanged := !slices.Equal(config.LaneScopedRuntimeNames(cr.cfg), config.LaneScopedRuntimeNames(nextCfg))
+	if newProviderName != *lastProviderName || packRuntimeDeclarationChanged(cr.cfg, nextCfg, newProviderName) || laneRuntimesChanged {
 		newSp, spErr := newSessionProviderForCityByName(nextCfg, newProviderName, nextCfg.Session, cr.cityName, cr.cityPath)
 		if spErr != nil {
 			appendWarning(fmt.Sprintf("new session provider %q: %v (keeping old provider)", newProviderName, spErr))
 		} else {
+			reloadCtx := sessionProviderContextForCity(nextCfg, cr.cityPath, os.Getenv("GC_SESSION"))
+			newSp = composeLaneRuntimeProvider(reloadCtx, loadProviderSessionSnapshot(reloadCtx), newSp)
 			providerChanged = true
 			nextSp = newSp
 			nextDops = newDrainOps(nextSp)
@@ -3914,7 +3923,15 @@ func demandSnapshotDemandSourcesEventBacked(cfg *config.City) bool {
 }
 
 func (cr *CityRuntime) installDemandSnapshotSideEffects(result DesiredStateResult) {
-	autoSP, ok := cr.sp.(*sessionauto.Provider)
+	for _, tp := range result.State {
+		if strings.TrimSpace(tp.SessionName) == "" {
+			continue
+		}
+		routeLaneRuntime(cr.sp, tp.SessionName, tp.RuntimeProvider)
+	}
+	// Capability assertion, not *auto.Provider: the runtime router can wrap the
+	// transport router and forwards RouteACP to it.
+	autoSP, ok := cr.sp.(interface{ RouteACP(string) })
 	if !ok {
 		return
 	}

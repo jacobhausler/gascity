@@ -96,7 +96,7 @@ func TestApplyAgentOverrideSleepAfterIdleSetsSource(t *testing.T) {
 	agent := &Agent{Name: "worker"}
 	override := &AgentOverride{SleepAfterIdle: &raw}
 
-	applyAgentOverride(agent, override)
+	applyAgentOverride(agent, override, "")
 
 	if agent.SleepAfterIdle != "0s" {
 		t.Fatalf("SleepAfterIdle = %q, want 0s", agent.SleepAfterIdle)

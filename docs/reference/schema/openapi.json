@@ -387,6 +387,12 @@
           "Rig": {
             "type": "string"
           },
+          "RuntimeProvider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "ScaleCheck": {
             "type": [
               "string",
@@ -523,6 +529,7 @@
           "PromptTemplate",
           "Session",
           "Provider",
+          "RuntimeProvider",
           "Upstream",
           "Args",
           "StartCommand",
@@ -6672,6 +6679,12 @@
               "null"
             ]
           },
+          "RuntimeProvider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "Suspended": {
             "type": [
               "boolean",
@@ -6690,6 +6703,7 @@
           "Path",
           "Prefix",
           "DefaultBranch",
+          "RuntimeProvider",
           "Suspended",
           "SuspendedOnStart",
           "FormulaVars"

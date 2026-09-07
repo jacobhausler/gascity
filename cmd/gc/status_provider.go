@@ -175,6 +175,14 @@ func (p *statusProvider) RouteACP(name string) {
 	}
 }
 
+// RouteRuntime forwards lane-scoped runtime routing to the wrapped provider so
+// the bounded status wrapper does not hide the runtime router underneath it.
+func (p *statusProvider) RouteRuntime(name, runtimeProvider string) {
+	if router, ok := p.base.(interface{ RouteRuntime(string, string) }); ok {
+		router.RouteRuntime(name, runtimeProvider)
+	}
+}
+
 func (p *statusProvider) GetLastActivity(name string) (time.Time, error) {
 	result := boundedStatusCall(p, struct {
 		value time.Time

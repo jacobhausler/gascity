@@ -262,6 +262,14 @@ func withSessionProviderConstructionContext(sp runtime.Provider, err error) (run
 // routed at start via the same auto.Provider (build_desired_state RouteACP).
 // Behavior is identical to the prior inline composition.
 func resolveSessionTransportProvider(ctx sessionProviderContext, sessionBeads *sessionBeadSnapshot) (runtime.Provider, error) {
+	base, err := resolveSessionTransportProviderBase(ctx, sessionBeads)
+	if err != nil {
+		return nil, err
+	}
+	return composeLaneRuntimeProvider(ctx, sessionBeads, base), nil
+}
+
+func resolveSessionTransportProviderBase(ctx sessionProviderContext, sessionBeads *sessionBeadSnapshot) (runtime.Provider, error) {
 	base, err := buildSessionProviderByName(ctx.cfg, ctx.providerName, ctx.sc, ctx.cityName, ctx.cityPath)
 	if err != nil {
 		return nil, err

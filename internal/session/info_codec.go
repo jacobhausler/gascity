@@ -85,6 +85,12 @@ var infoKeyCodec = []infoKeySpec{
 		i.Transport = normalizeTransport(i.Provider, v)
 	}},
 
+	// runtime_provider: the stamped runtime backend (WHERE the box lives).
+	// Independent of the provider/transport pair above — it is neither derived
+	// from them nor an input to them — so it participates in no ordering
+	// dependency.
+	{RuntimeProviderMetadataKey, func(i *Info, v string) { i.RuntimeProvider = v }},
+
 	// identity / pool / named-session cluster
 	{NamedSessionIdentityMetadata, func(i *Info, v string) { i.ConfiguredNamedIdentity = v }},
 	{NamedSessionMetadataKey, func(i *Info, v string) { i.ConfiguredNamedSession = strings.TrimSpace(v) == "true" }},

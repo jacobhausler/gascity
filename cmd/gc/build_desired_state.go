@@ -20,7 +20,6 @@ import (
 	"github.com/gastownhall/gascity/internal/hooks"
 	"github.com/gastownhall/gascity/internal/poolplan"
 	"github.com/gastownhall/gascity/internal/runtime"
-	sessionauto "github.com/gastownhall/gascity/internal/runtime/auto"
 	"github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/storeref"
 	"github.com/gastownhall/gascity/internal/suspensionstate"
@@ -4744,6 +4743,12 @@ func poolSessionCreateLockIdentifiers(
 	return lockIDs
 }
 
+// createPoolSessionBeadWithGuardedAlias creates a pool session bead and routes
+// the new session to its lane-scoped runtime backend before returning. The
+// stamp is written by the bead create (createPoolSessionBeadWithAlias); the
+// route has to be registered here, where the session provider is in scope, so
+// the session reaches its own backend at creation instead of at the next
+// reconciler pass.
 func createPoolSessionBeadWithGuardedAlias(
 	bp *agentBuildParams,
 	cfgAgent *config.Agent,
@@ -4752,7 +4757,7 @@ func createPoolSessionBeadWithGuardedAlias(
 	slot int,
 	metadata map[string]string,
 ) (session.Info, error) {
-	return createPoolSessionBeadWithGuardedAliasUsingLock(
+	info, err := createPoolSessionBeadWithGuardedAliasUsingLock(
 		bp,
 		cfgAgent,
 		template,
@@ -4761,6 +4766,10 @@ func createPoolSessionBeadWithGuardedAlias(
 		metadata,
 		session.WithCitySessionIdentifierLocks,
 	)
+	if err == nil && bp != nil {
+		routeLaneRuntime(bp.sp, info.SessionNameMetadata, info.RuntimeProvider)
+	}
+	return info, err
 }
 
 func createPoolSessionBeadWithGuardedAliasUsingLock(
@@ -6348,11 +6357,16 @@ func installAgentSideEffects(bp *agentBuildParams, cfgAgent *config.Agent, tp Te
 		}
 	}
 	// Register ACP route on the auto provider for dynamic sessions.
+	// The assertion is on the RouteACP capability, not on *auto.Provider: the
+	// runtime router can wrap the transport router and forwards RouteACP to it.
 	if tp.IsACP {
-		if autoSP, ok := bp.sp.(*sessionauto.Provider); ok {
+		if autoSP, ok := bp.sp.(interface{ RouteACP(string) }); ok {
 			autoSP.RouteACP(tp.SessionName)
 		}
 	}
+	// Same for the lane-scoped runtime: a dynamically created session must be
+	// routed to its own backend before the first lifecycle op reaches it.
+	routeLaneRuntime(bp.sp, tp.SessionName, tp.RuntimeProvider)
 }
 
 // hooksWithoutClaude returns ih with any "claude" entries filtered out.

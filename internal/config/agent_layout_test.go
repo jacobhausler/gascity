@@ -202,7 +202,7 @@ func TestApplyAgentOverride_PreservesLayout(t *testing.T) {
 	strVal := func(s string) *string { return &s }
 	agent := Agent{Name: "polecat", layout: layoutV1Inline}
 	override := AgentOverride{Agent: "polecat", PromptTemplate: strVal("prompts/p.md")}
-	applyAgentOverride(&agent, &override)
+	applyAgentOverride(&agent, &override, "")
 	if agent.layout != layoutV1Inline {
 		t.Errorf("agent.layout after override = %v, want layoutV1Inline (preserved)", agent.layout)
 	}

@@ -317,6 +317,12 @@ func (s *Server) materializeNamedSessionWithContext(ctx context.Context, store b
 	if resolved.BuiltinAncestor != "" && resolved.BuiltinAncestor != resolved.Name {
 		extraMeta["builtin_ancestor"] = resolved.BuiltinAncestor
 	}
+	// Stamp the lane-scoped runtime the same way the CLI and reconciler create
+	// paths do, so an API-materialized session records where its box lives —
+	// and route it now, before the create below, so the create and every
+	// lifecycle op that follows reach that backend rather than the city default
+	// until the next reconciler pass re-seeds the routes.
+	stampAndRouteSessionRuntime(s.state.Config(), spec.Agent, s.state.SessionProvider(), spec.SessionName, extraMeta)
 	mcpServers, err := s.sessionMCPServers(qualifiedTemplate, resolved.Name, spec.Identity, workDir, transport, "", nil)
 	if err != nil {
 		return "", err

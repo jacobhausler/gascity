@@ -321,6 +321,7 @@ func createPoolSessionBeadWithIdentifiers(
 		"session_name":              identifiers.sessionName,
 		poolManagedMetadataKey:      boolMetadata(true),
 	}
+	stampLaneRuntimeMetadata(meta, runtimeProviderForAgentTemplate(cfg, template))
 	if alias := strings.TrimSpace(identity.Alias); alias != "" {
 		meta["alias"] = alias
 	}

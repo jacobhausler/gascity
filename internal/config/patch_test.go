@@ -432,7 +432,7 @@ func TestAgentOverrideInjectFragmentsPresenceAware(t *testing.T) {
 		if _, err := toml.Decode(`agent = "worker"`, &override); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		applyAgentOverride(a, &override)
+		applyAgentOverride(a, &override, "")
 		got := a.InjectFragments
 		if len(got) != 1 || got[0] != "baseline" {
 			t.Errorf("InjectFragments = %v, want [baseline] (unchanged)", got)
@@ -445,7 +445,7 @@ func TestAgentOverrideInjectFragmentsPresenceAware(t *testing.T) {
 		if _, err := toml.Decode("agent = \"worker\"\ninject_fragments = []", &override); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		applyAgentOverride(a, &override)
+		applyAgentOverride(a, &override, "")
 		if len(a.InjectFragments) != 0 {
 			t.Errorf("InjectFragments = %v, want empty (cleared)", a.InjectFragments)
 		}
@@ -457,7 +457,7 @@ func TestAgentOverrideInjectFragmentsPresenceAware(t *testing.T) {
 		if _, err := toml.Decode("agent = \"worker\"\ninject_fragments = [\"frag-a\", \"frag-b\"]", &override); err != nil {
 			t.Fatalf("decode: %v", err)
 		}
-		applyAgentOverride(a, &override)
+		applyAgentOverride(a, &override, "")
 		got := a.InjectFragments
 		if len(got) != 2 || got[0] != "frag-a" || got[1] != "frag-b" {
 			t.Errorf("InjectFragments = %v, want [frag-a frag-b]", got)

@@ -94,6 +94,12 @@ type TemplateParams struct {
 	WakeMode string
 	// IsACP is true when the resolved session transport is SessionTransportACP.
 	IsACP bool
+	// RuntimeProvider is the lane-scoped runtime backend for this agent — its
+	// own runtime_provider, else its rig's default. Empty means no lane-scoped
+	// selection: the session follows the city-wide session provider, as every
+	// session did before the field existed. It is stamped on the session record
+	// at creation and drives runtime routing thereafter.
+	RuntimeProvider string
 	// HookEnabled reports whether provider hooks are installed for this agent.
 	// Hooks complement startup delivery but do not replace the initial
 	// user-turn prompt. SessionStart hooks can add context, persist session
@@ -733,6 +739,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		RigRoot:          rigRoot,
 		WakeMode:         cfgAgent.WakeMode,
 		IsACP:            sessionTransport == config.SessionTransportACP,
+		RuntimeProvider:  laneRuntimeProviderForAgent(p.city, p.rigs, cfgAgent),
 		HookEnabled:      hasHooks,
 		MCPServers:       mcpServers,
 	}

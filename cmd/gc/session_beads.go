@@ -1936,6 +1936,9 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 			if tp.Command != "" {
 				meta["command"] = tp.Command
 			}
+			// Stamp the lane-scoped runtime once, at creation: from here on the
+			// session's own record — not current config — says where its box is.
+			stampLaneRuntimeMetadata(meta, tp.RuntimeProvider)
 			if tp.ResolvedProvider != nil {
 				stampResolvedProviderSessionMetadata(meta, tp.ResolvedProvider)
 				if tp.ResolvedProvider.ResumeFlag != "" {
@@ -1992,6 +1995,12 @@ func syncSessionBeadsWithSnapshotAndRigStores(
 				if createdSessionName == "" {
 					createdSessionName = sn
 				}
+				// Route at creation, under the definitive runtime name (a pool
+				// instance's name is derived above, not the one seeded into
+				// meta). Without this the session is routed only when the next
+				// tick re-seeds the provider, and the ops in between land on
+				// the city default backend.
+				routeLaneRuntime(sp, createdSessionName, tp.RuntimeProvider)
 			}
 			if managedAlias != "" {
 				lockFn := func() error {

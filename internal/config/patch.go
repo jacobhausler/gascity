@@ -55,6 +55,11 @@ type AgentPatch struct {
 	Session *string `toml:"session,omitempty"`
 	// Provider overrides the provider name.
 	Provider *string `toml:"provider,omitempty"`
+	// RuntimeProvider overrides the agent's runtime backend selection —
+	// WHERE its sessions run (see Agent.RuntimeProvider). This is the
+	// lane-scoped form: patching one agent moves only that agent's sessions,
+	// unlike the city-wide [session] provider.
+	RuntimeProvider *string `toml:"runtime_provider,omitempty"`
 	// Upstream overrides the model-serving endpoint selection (Phase C).
 	Upstream *string `toml:"upstream,omitempty"`
 	// Args overrides the provider's default arguments. Leave unset to keep
@@ -209,6 +214,9 @@ type RigPatch struct {
 	Prefix *string `toml:"prefix,omitempty"`
 	// DefaultBranch overrides the rig's recorded mainline branch.
 	DefaultBranch *string `toml:"default_branch,omitempty"`
+	// RuntimeProvider overrides the rig's default runtime backend for agents
+	// that do not set their own (see Rig.RuntimeProvider).
+	RuntimeProvider *string `toml:"runtime_provider,omitempty"`
 	// Suspended is the deprecated, pre-runtime-state suspension override.
 	// Parsed for backwards compatibility; `gc doctor` surfaces it as a
 	// warning and recommends the rename to SuspendedOnStart. No behavioral
@@ -543,6 +551,9 @@ func applyAgentMutation(a *Agent, p *AgentPatch, sleepSource string) {
 	if p.Provider != nil {
 		a.Provider = *p.Provider
 	}
+	if p.RuntimeProvider != nil {
+		a.RuntimeProvider = *p.RuntimeProvider
+	}
 	if p.Upstream != nil {
 		a.Upstream = *p.Upstream
 	}
@@ -723,6 +734,9 @@ func applyRigPatch(cfg *City, patch *RigPatch) error {
 			}
 			if patch.DefaultBranch != nil {
 				r.DefaultBranch = *patch.DefaultBranch
+			}
+			if patch.RuntimeProvider != nil {
+				r.RuntimeProvider = *patch.RuntimeProvider
 			}
 			if patch.Suspended != nil {
 				r.Suspended = *patch.Suspended

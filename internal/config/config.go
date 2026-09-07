@@ -640,6 +640,12 @@ type Rig struct {
 	// resolved the same way as DefaultSlingTarget. Example:
 	//   default_sling_targets = ["rig/polecat-a", "rig/polecat-b"]
 	DefaultSlingTargets []string `toml:"default_sling_targets,omitempty"`
+	// RuntimeProvider is the default runtime backend for agents in this rig
+	// that do not set their own runtime_provider. "" (default) inherits the
+	// city-level [session] provider, so an unset field changes nothing.
+	// See Agent.RuntimeProvider for the selection names and the resolution
+	// order.
+	RuntimeProvider string `toml:"runtime_provider,omitempty"`
 	// SessionSleep overrides workspace-level idle sleep defaults for agents in
 	// this rig.
 	SessionSleep SessionSleepConfig `toml:"session_sleep,omitempty"`
@@ -693,6 +699,9 @@ type AgentOverride struct {
 	Session *string `toml:"session,omitempty"`
 	// Provider overrides the provider name.
 	Provider *string `toml:"provider,omitempty"`
+	// RuntimeProvider overrides the agent's runtime backend selection
+	// (see Agent.RuntimeProvider).
+	RuntimeProvider *string `toml:"runtime_provider,omitempty"`
 	// Upstream overrides the model-serving endpoint selection (Phase C).
 	Upstream *string `toml:"upstream,omitempty"`
 	// Args overrides the provider's default arguments. Leave unset to keep
@@ -3225,6 +3234,18 @@ type Agent struct {
 	Session string `toml:"session,omitempty" jsonschema:"enum=acp"`
 	// Provider names the provider preset to use for this agent.
 	Provider string `toml:"provider,omitempty"`
+	// RuntimeProvider selects the runtime backend for this agent's sessions —
+	// WHERE the session's box lives, as opposed to Provider (which harness) and
+	// Session (which transport). It takes the same selection names as the
+	// city-level [session] provider ("tmux", "subprocess", "k8s",
+	// "ssh:user@host", "exec:<script>", a pack-declared runtime, …).
+	//
+	// "" (default) inherits the rig's runtime_provider, then the city-level
+	// [session] provider, then the default runtime — so an unset field changes
+	// nothing. The resolved value is stamped on the session record when the
+	// session is created, and every later lifecycle operation routes to the
+	// stamped runtime.
+	RuntimeProvider string `toml:"runtime_provider,omitempty"`
 	// Upstream selects the model-serving endpoint (a key in [upstreams]) for
 	// this agent — WHO serves the model. "" (default) falls back to
 	// agent_defaults.upstream; if still empty, no upstream env is injected
@@ -3422,6 +3443,13 @@ type Agent struct {
 	// Set during pack/fragment loading; empty for inline agents.
 	// Runtime-only — not persisted to TOML or JSON.
 	SourceDir string `toml:"-" json:"-"`
+	// RigName records the rig that owns this agent, independently of Dir.
+	// Dir is the identity prefix and defaults to the rig name, but a rig
+	// override may re-point it (AgentOverride.Dir), after which Dir no longer
+	// names the owning rig. Stamped when a rig-scoped override is applied;
+	// empty means Dir is still the rig name. Use [Agent.OwningRig] to read it.
+	// Runtime-only — not persisted to TOML or JSON.
+	RigName string `toml:"-" json:"-"`
 	// SharedSkills holds legacy derived attachment-list state for this agent.
 	// Runtime-only compatibility data — not persisted to TOML or JSON, and
 	// not consumed by the active skill materializer.
@@ -4086,6 +4114,15 @@ func ValidateAgents(agents []Agent) error {
 		default:
 			return fmt.Errorf("agent %q: lifecycle must be %q or empty, got %q", a.QualifiedName(), AgentLifecycleOneShot, a.Lifecycle)
 		}
+		// RuntimeProvider is an open selection name (builtins, "exec:<script>",
+		// "ssh:<endpoint>", pack-declared runtimes), so it has no enum. It must
+		// still be a clean, non-blank token: a value that only looks set —
+		// whitespace, or one with stray padding — would resolve to a runtime
+		// nobody declared, and a runtime that cannot be resolved fails closed
+		// for every session stamped with it.
+		if a.RuntimeProvider != "" && strings.TrimSpace(a.RuntimeProvider) != a.RuntimeProvider {
+			return fmt.Errorf("agent %q: runtime_provider must be a bare selection name without surrounding whitespace, got %q", a.QualifiedName(), a.RuntimeProvider)
+		}
 		// PromptFlag required when prompt_mode = "flag".
 		if a.PromptMode == "flag" && a.PromptFlag == "" {
 			return fmt.Errorf("agent %q: prompt_flag is required when prompt_mode = \"flag\"", a.QualifiedName())
@@ -4374,6 +4411,11 @@ func ValidateRigs(rigs []Rig, hqPrefix string) error {
 			return fmt.Errorf("rig %q: duplicate name", r.Name)
 		}
 		seenNames[r.Name] = true
+		// Same contract as the agent-level field: an open selection name, but
+		// never a padded or blank one (see ValidateAgents).
+		if r.RuntimeProvider != "" && strings.TrimSpace(r.RuntimeProvider) != r.RuntimeProvider {
+			return fmt.Errorf("rig %q: runtime_provider must be a bare selection name without surrounding whitespace, got %q", r.Name, r.RuntimeProvider)
+		}
 
 		prefix := strings.ToLower(r.EffectivePrefix())
 		if other, ok := seenPrefixes[prefix]; ok {

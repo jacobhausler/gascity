@@ -92,6 +92,7 @@ Agent defines a configured agent in the city.
 | `nudge` | string |  |  | Nudge is text typed into the agent's session after startup. Used for CLI agents that don't accept command-line prompts. For a known pool session whose trigger remains unclaimed after the 90-second recovery grace period, an empty or whitespace-only Nudge does not opt out: it sends "Run gc hook --claim --drain-ack --json now; if it returns work, execute it immediately." This fallback applies only to the initial stalled-claim recovery; continuation-claim recovery remains configured-only. Unknown templates receive no fallback. |
 | `session` | string |  |  | Session overrides the session transport for this agent. "" (default) uses the city-level session provider (typically tmux). "acp" uses the Agent Client Protocol (JSON-RPC over stdio). The agent's resolved provider must have supports_acp = true. Enum: `acp` |
 | `provider` | string |  |  | Provider names the provider preset to use for this agent. |
+| `runtime_provider` | string |  |  | RuntimeProvider selects the runtime backend for this agent's sessions — WHERE the session's box lives, as opposed to Provider (which harness) and Session (which transport). It takes the same selection names as the city-level [session] provider ("tmux", "subprocess", "k8s", "ssh:user@host", "exec:&lt;script&gt;", a pack-declared runtime, …).  "" (default) inherits the rig's runtime_provider, then the city-level [session] provider, then the default runtime — so an unset field changes nothing. The resolved value is stamped on the session record when the session is created, and every later lifecycle operation routes to the stamped runtime. |
 | `upstream` | string |  |  | Upstream selects the model-serving endpoint (a key in [upstreams]) for this agent — WHO serves the model. "" (default) falls back to agent_defaults.upstream; if still empty, no upstream env is injected (ambient behavior). Switching it relaunches the agent in the warm box. |
 | `start_command` | string |  |  | StartCommand overrides the provider's command for this agent. |
 | `lifecycle` | string |  |  | Lifecycle controls runtime lifetime semantics. Empty uses the default long-lived session lifecycle; "one_shot" means the command is expected to do bounded work and exit cleanly. Enum: `one_shot` |
@@ -172,6 +173,7 @@ AgentOverride modifies a pack-stamped agent for a specific rig.
 | `prompt_template` | string |  |  | PromptTemplate overrides the prompt template path. Relative paths resolve against the declaring config file's directory (pack-safe). Paths prefixed with "//" resolve against the city root. |
 | `session` | string |  |  | Session overrides the session transport ("acp"). |
 | `provider` | string |  |  | Provider overrides the provider name. |
+| `runtime_provider` | string |  |  | RuntimeProvider overrides the agent's runtime backend selection (see Agent.RuntimeProvider). |
 | `upstream` | string |  |  | Upstream overrides the model-serving endpoint selection (Phase C). |
 | `args` | []string |  |  | Args overrides the provider's default arguments. Leave unset to keep the pack-defined args; set to an empty list to clear them; set to a populated list to replace them entirely (full replace, not append). |
 | `start_command` | string |  |  | StartCommand overrides the start command. |
@@ -231,6 +233,7 @@ AgentPatch modifies existing agents identified by rig scope and Name.
 | `prompt_template` | string |  |  | PromptTemplate overrides the prompt template path. Relative paths resolve against the declaring config file's directory (pack-safe). Paths prefixed with "//" resolve against the city root. |
 | `session` | string |  |  | Session overrides the session transport ("acp" or "tmux"). |
 | `provider` | string |  |  | Provider overrides the provider name. |
+| `runtime_provider` | string |  |  | RuntimeProvider overrides the agent's runtime backend selection — WHERE its sessions run (see Agent.RuntimeProvider). This is the lane-scoped form: patching one agent moves only that agent's sessions, unlike the city-wide [session] provider. |
 | `upstream` | string |  |  | Upstream overrides the model-serving endpoint selection (Phase C). |
 | `args` | []string |  |  | Args overrides the provider's default arguments. Leave unset to keep the pack-defined args; set to an empty list to clear them; set to a populated list to replace them entirely (full replace, not append). |
 | `start_command` | string |  |  | StartCommand overrides the start command. |
@@ -735,6 +738,7 @@ Rig defines an external project registered in the city.
 | `patches` | []AgentOverride |  |  | Patches is the V2 name for rig-level agent overrides. Takes precedence over Overrides if both are set. |
 | `default_sling_target` | string |  |  | DefaultSlingTarget is the agent qualified name used when gc sling is invoked with only a bead ID (no explicit target). Resolved via resolveAgentIdentity. Example: "rig/polecat" |
 | `default_sling_targets` | []string |  |  | DefaultSlingTargets is the plural form of DefaultSlingTarget. When set, targetless gc sling picks one entry at random each dispatch. Takes precedence over DefaultSlingTarget when non-empty. Each entry is resolved the same way as DefaultSlingTarget. Example:   default_sling_targets = ["rig/polecat-a", "rig/polecat-b"] |
+| `runtime_provider` | string |  |  | RuntimeProvider is the default runtime backend for agents in this rig that do not set their own runtime_provider. "" (default) inherits the city-level [session] provider, so an unset field changes nothing. See Agent.RuntimeProvider for the selection names and the resolution order. |
 | `session_sleep` | SessionSleepConfig |  |  | SessionSleep overrides workspace-level idle sleep defaults for agents in this rig. |
 | `dolt_host` | string |  |  | DoltHost overrides the city-level Dolt host for this rig's beads. Use when the rig's database lives on a different Dolt server (e.g., shared from another city). |
 | `dolt_port` | string |  |  | DoltPort overrides the city-level Dolt port for this rig's beads. When set, controller commands (scale_check, work_query) prefix their shell invocations with BEADS_DOLT_SERVER_PORT=&lt;port&gt; so bd connects to the correct server instead of the city-level default. |
@@ -750,6 +754,7 @@ RigPatch modifies an existing rig identified by Name.
 | `path` | string |  |  | Path overrides the rig's filesystem path. |
 | `prefix` | string |  |  | Prefix overrides the bead ID prefix. |
 | `default_branch` | string |  |  | DefaultBranch overrides the rig's recorded mainline branch. |
+| `runtime_provider` | string |  |  | RuntimeProvider overrides the rig's default runtime backend for agents that do not set their own (see Rig.RuntimeProvider). |
 | `suspended` | boolean |  |  | Suspended is the deprecated, pre-runtime-state suspension override. Parsed for backwards compatibility; `gc doctor` surfaces it as a warning and recommends the rename to SuspendedOnStart. No behavioral code path reads it. |
 | `suspended_on_start` | boolean |  |  | SuspendedOnStart overrides the rig's desired suspension state at city start. Mirrors Rig.SuspendedOnStart. |
 | `formula_vars` | map[string]string |  |  | FormulaVars adds or overrides rig-scoped formula var defaults. Additive merge: patch keys win over existing rig keys, unspecified keys are preserved. |

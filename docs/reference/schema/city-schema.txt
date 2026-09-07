@@ -124,6 +124,10 @@
           "type": "string",
           "description": "Provider names the provider preset to use for this agent."
         },
+        "runtime_provider": {
+          "type": "string",
+          "description": "RuntimeProvider selects the runtime backend for this agent's sessions —\nWHERE the session's box lives, as opposed to Provider (which harness) and\nSession (which transport). It takes the same selection names as the\ncity-level [session] provider (\"tmux\", \"subprocess\", \"k8s\",\n\"ssh:user@host\", \"exec:\u003cscript\u003e\", a pack-declared runtime, …).\n\n\"\" (default) inherits the rig's runtime_provider, then the city-level\n[session] provider, then the default runtime — so an unset field changes\nnothing. The resolved value is stamped on the session record when the\nsession is created, and every later lifecycle operation routes to the\nstamped runtime."
+        },
         "upstream": {
           "type": "string",
           "description": "Upstream selects the model-serving endpoint (a key in [upstreams]) for\nthis agent — WHO serves the model. \"\" (default) falls back to\nagent_defaults.upstream; if still empty, no upstream env is injected\n(ambient behavior). Switching it relaunches the agent in the warm box."
@@ -488,6 +492,10 @@
           "type": "string",
           "description": "Provider overrides the provider name."
         },
+        "runtime_provider": {
+          "type": "string",
+          "description": "RuntimeProvider overrides the agent's runtime backend selection\n(see Agent.RuntimeProvider)."
+        },
         "upstream": {
           "type": "string",
           "description": "Upstream overrides the model-serving endpoint selection (Phase C)."
@@ -776,6 +784,10 @@
         "provider": {
           "type": "string",
           "description": "Provider overrides the provider name."
+        },
+        "runtime_provider": {
+          "type": "string",
+          "description": "RuntimeProvider overrides the agent's runtime backend selection —\nWHERE its sessions run (see Agent.RuntimeProvider). This is the\nlane-scoped form: patching one agent moves only that agent's sessions,\nunlike the city-wide [session] provider."
         },
         "upstream": {
           "type": "string",
@@ -2590,6 +2602,10 @@
           "type": "array",
           "description": "DefaultSlingTargets is the plural form of DefaultSlingTarget.\nWhen set, targetless gc sling picks one entry at random each dispatch.\nTakes precedence over DefaultSlingTarget when non-empty. Each entry is\nresolved the same way as DefaultSlingTarget. Example:\n  default_sling_targets = [\"rig/polecat-a\", \"rig/polecat-b\"]"
         },
+        "runtime_provider": {
+          "type": "string",
+          "description": "RuntimeProvider is the default runtime backend for agents in this rig\nthat do not set their own runtime_provider. \"\" (default) inherits the\ncity-level [session] provider, so an unset field changes nothing.\nSee Agent.RuntimeProvider for the selection names and the resolution\norder."
+        },
         "session_sleep": {
           "$ref": "#/$defs/SessionSleepConfig",
           "description": "SessionSleep overrides workspace-level idle sleep defaults for agents in\nthis rig."
@@ -2634,6 +2650,10 @@
         "default_branch": {
           "type": "string",
           "description": "DefaultBranch overrides the rig's recorded mainline branch."
+        },
+        "runtime_provider": {
+          "type": "string",
+          "description": "RuntimeProvider overrides the rig's default runtime backend for agents\nthat do not set their own (see Rig.RuntimeProvider)."
         },
         "suspended": {
           "type": "boolean",

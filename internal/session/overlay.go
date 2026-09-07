@@ -20,6 +20,7 @@ var envKeyPattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{0,127}$`)
 var bannedOverlayKeys = map[string]bool{
 	"command":                    true,
 	"provider":                   true,
+	RuntimeProviderMetadataKey:   true,
 	"session_key":                true,
 	"state":                      true,
 	"generation":                 true,

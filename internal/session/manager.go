@@ -78,24 +78,34 @@ type Info struct {
 	// label). IsSessionBeadOrRepairableInfo reads it to classify repairable
 	// beads without touching the raw bead. Additive, internal-only (absent from
 	// the HTTP wire).
-	Type          string
-	Template      string
-	State         State
-	Closed        bool
-	Title         string
-	Alias         string
-	AgentName     string // persisted concrete identity for MCP materialization
-	Provider      string
-	Transport     string
-	Command       string // resolved command stored at creation
-	WorkDir       string
-	SessionName   string // tmux session name
-	SessionKey    string // provider-specific resume handle (UUID)
-	ResumeFlag    string // stored provider resume flag (e.g., "--resume")
-	ResumeStyle   string // "flag" or "subcommand"
-	ResumeCommand string // explicit resume command template ({{.SessionKey}})
-	CreatedAt     time.Time
-	LastActive    time.Time
+	Type      string
+	Template  string
+	State     State
+	Closed    bool
+	Title     string
+	Alias     string
+	AgentName string // persisted concrete identity for MCP materialization
+	Provider  string
+	Transport string
+	// RuntimeProvider is the runtime backend this session was created on —
+	// WHERE its box lives, stamped at creation from the agent's (or its rig's)
+	// runtime_provider. Empty means the session was created with no lane-scoped
+	// selection and follows the city-wide session provider, which is every
+	// session created before the field existed. Once stamped, the value is
+	// authoritative for the rest of the session's life: lifecycle operations
+	// route to it even after configuration changes, because a provider change
+	// cannot migrate a live box. Additive, internal-only (absent from the HTTP
+	// wire).
+	RuntimeProvider string
+	Command         string // resolved command stored at creation
+	WorkDir         string
+	SessionName     string // tmux session name
+	SessionKey      string // provider-specific resume handle (UUID)
+	ResumeFlag      string // stored provider resume flag (e.g., "--resume")
+	ResumeStyle     string // "flag" or "subcommand"
+	ResumeCommand   string // explicit resume command template ({{.SessionKey}})
+	CreatedAt       time.Time
+	LastActive      time.Time
 	// LastNudgeDeliveredAt records the wall-clock time of the most recent
 	// successful nudge delivery to this session. Zero when no nudge has
 	// been delivered yet (or the metadata predates the stamping path).

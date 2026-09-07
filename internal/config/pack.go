@@ -2754,7 +2754,7 @@ func qualifiedAgentNames(agents []Agent) []string {
 
 // applyOverrides applies per-rig overrides to pack-stamped agents.
 // Each override targets an agent by name within the pack.
-func applyOverrides(agents []Agent, overrides []AgentOverride, _ string) error {
+func applyOverrides(agents []Agent, overrides []AgentOverride, rigName string) error {
 	for i, ov := range overrides {
 		if ov.Agent == "" {
 			return fmt.Errorf("overrides[%d]: agent name is required", i)
@@ -2762,7 +2762,7 @@ func applyOverrides(agents []Agent, overrides []AgentOverride, _ string) error {
 		found := false
 		for j := range agents {
 			if agents[j].Name == ov.Agent {
-				applyAgentOverride(&agents[j], &ov)
+				applyAgentOverride(&agents[j], &ov, rigName)
 				found = true
 				break
 			}
@@ -2780,7 +2780,13 @@ func applyOverrides(agents []Agent, overrides []AgentOverride, _ string) error {
 // merged through the shared applyAgentMutation body, so patch and override can
 // never diverge field-by-field. See applyAgentMutation for the enforcement
 // tests.
-func applyAgentOverride(a *Agent, ov *AgentOverride) {
+func applyAgentOverride(a *Agent, ov *AgentOverride, rigName string) {
+	// Record the owning rig before the re-dir below: the rig that declares the
+	// override owns the agent whatever Dir ends up saying, and rig-level
+	// defaults must still resolve for it (see Agent.OwningRig).
+	if rigName = strings.TrimSpace(rigName); rigName != "" {
+		a.RigName = rigName
+	}
 	if ov.Dir != nil {
 		a.Dir = *ov.Dir
 	}
@@ -2806,6 +2812,7 @@ func (ov *AgentOverride) toAgentPatch() *AgentPatch {
 		PromptTemplate:          ov.PromptTemplate,
 		Session:                 ov.Session,
 		Provider:                ov.Provider,
+		RuntimeProvider:         ov.RuntimeProvider,
 		Upstream:                ov.Upstream,
 		Args:                    ov.Args,
 		StartCommand:            ov.StartCommand,
