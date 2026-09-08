@@ -598,6 +598,17 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 	}
 	cmd.Env = workQueryEnvForDir(env, cmd.Dir)
 
+	// Seat-identity actor substitution (gastownhall/gascity#5716): bd's
+	// seat-facing gates compare the ONE actor string this process carries
+	// against the bead's assignee, and since #5663 those arrive on different
+	// channels for an unaliased pool seat. Forward the bead's own assignee
+	// instead, but only when membership in this session's identity set has been
+	// proven first — see bd_seat_identity.go. Refuses silently toward today's
+	// behaviour whenever the subject bead could not be read.
+	if actor, ok := bdSeatIdentityOverride(bdArgs, guardBeads, guardStore, cfg, cityPath); ok {
+		cmd.Env = bdSeatIdentityWithActor(cmd.Env, actor)
+	}
+
 	traceStart := time.Now()
 	runErr := cmd.Run()
 	traceExit := 0

@@ -955,7 +955,7 @@ func serveBdByIDResolved(door bdByIDClassDoor, op bdByIDOp, bdArgs []string, rig
 	case bdByIDShow:
 		return printBdByIDBead(resolution.Bead, op.JSON, door.bindingName(), stdout, stderr), true
 	case bdByIDClaim:
-		return doBdByIDClaim(resolution.Graph, op.ID, bdByIDClaimActor(), op.JSON, door.bindingName(), stdout, stderr), true
+		return doBdByIDClaim(resolution.Graph, op.ID, bdByIDClaimActorFor(resolution.Bead.Assignee), op.JSON, door.bindingName(), stdout, stderr), true
 	case bdByIDRelease:
 		return doBdByIDReleaseIfCurrent(resolution.Graph, op.ID, op.Assignee, stdout, stderr), true
 	case bdByIDDepList:
