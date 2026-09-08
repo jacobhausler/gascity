@@ -43,6 +43,30 @@ type Commenter interface {
 	Comment(id, text string) error
 }
 
+// ClaimSupported reports whether store implements either claim shape, i.e.
+// whether ClaimFor would delegate to the backend rather than answer
+// ErrClaimUnsupported. It exists for the callers that must refuse BEFORE they
+// have written anything: a front door that reserves a session pointer or a
+// transaction row first cannot learn capability support from the claim result
+// without leaving its own write behind.
+//
+// It is the same predicate ClaimFor applies, stated once and next to it, so the
+// pre-write probe and the dispatch cannot drift — the failure mode this seam
+// prevents is a caller restating one of the two shapes locally and asserting
+// that narrower shape against a wrapper (e.g. a cache that forwards to ClaimFor
+// and so exposes only ActorClaimer). Discover the capability here, never with a
+// locally declared interface.
+func ClaimSupported(store Store) bool {
+	if store == nil {
+		return false
+	}
+	if _, ok := store.(AssigneeClaimer); ok {
+		return true
+	}
+	_, ok := store.(ActorClaimer)
+	return ok
+}
+
 // ClaimFor performs the store's atomic claim compare-and-swap for assignee,
 // whichever of the two claim shapes the resolved store implements. It is the
 // single discovery point so callers do not repeat the pair of type
@@ -54,7 +78,7 @@ type Commenter interface {
 // error, and a re-claim by the current holder is idempotent. See the Claim
 // doc comment on sqlite_store_claim.go for the normative statement.
 func ClaimFor(store Store, id, assignee string) (Bead, bool, error) {
-	if store == nil {
+	if !ClaimSupported(store) {
 		return Bead{}, false, ErrClaimUnsupported
 	}
 	if claimer, ok := store.(AssigneeClaimer); ok {

@@ -317,24 +317,6 @@ func (s *Server) humaHandleWorkerComment(_ context.Context, input *WorkerComment
 // contract cannot be expressed by reusing them without changing what every
 // existing caller observes.
 
-// workerAssignmentClaimer is the acquire half of the conditional-assignment
-// pair, discovered on the RESOLVED store the same way
-// beads.ConditionalAssignmentReleaser is. It is restated here rather than
-// imported because the canonical beads.Store surface deliberately has no claim
-// method (internal/storebinding/beads_adapter.go:487-491): the capability
-// belongs to the backend, and each front door asserts it.
-//
-// POPULATION AT THIS COMMIT: the two-argument claim exists on SQLiteStore
-// (internal/beads/sqlite_store_claim.go:22) and on the graph adapter that
-// delegates to it (internal/storebinding/beads_adapter.go:500). BdStore's claim
-// takes a different shape — the assignee is implicit in the bd subprocess
-// invocation (internal/beads/bdstore.go:1726) — and NativeDoltStore has none.
-// Those backends answer 501 and write nothing; that boundary is the open half
-// of #5737 and is recorded, not papered over.
-type workerAssignmentClaimer interface {
-	Claim(id, assignee string) (beads.Bead, bool, error)
-}
-
 // workerCloseReasonMetadataKey is the durable close reason. beads.Bead has no
 // close-reason field and Store.Close takes none, but the key is NOT invented
 // here: "close_reason" is the metadata key gc already writes a close reason
@@ -363,11 +345,12 @@ func workerLeaseWriter(store beads.Store) (beads.ConditionalWriter, error) {
 
 // humaHandleWorkerClaim serves POST /v0/city/{cityName}/worker/claim.
 //
-// Delegates to the store's two-argument claim, so single-winner and
-// same-holder idempotence are the store's properties, not this handler's. The
-// loser is a 409, not a 200 with a warning: an off-host worker has no way to
-// notice it was displaced, and a displaced worker that believes it owns the
-// bead writes over the real owner.
+// Delegates to the store's claim through beads.ClaimFor, so single-winner and
+// same-holder idempotence are the store's properties, not this handler's — and
+// so whichever claim shape the resolved store (or its cache) implements is the
+// one used. The loser is a 409, not a 200 with a warning: an off-host worker
+// has no way to notice it was displaced, and a displaced worker that believes
+// it owns the bead writes over the real owner.
 //
 // The claim also stamps the two metadata keys the city reads — gc.claimed_at
 // and gc.lease_owner (internal/beadmeta/keys.go:61, :177) — as ONE
@@ -389,9 +372,16 @@ func (s *Server) humaHandleWorkerClaim(_ context.Context, input *WorkerClaimInpu
 	if err != nil {
 		return nil, err
 	}
-	claimer, ok := store.(workerAssignmentClaimer)
-	if !ok {
-		return nil, apierr.NotImplemented.Msg("worker claim: the resolved store does not implement the two-argument assignment claim; refusing to emulate it with a read-then-write, which would lose the single-winner guarantee")
+	// Capability is discovered through the native seam, not a locally restated
+	// interface. A front door that asserts one claim shape drifts away from the
+	// wrappers: cmd/gc/api_state.go:305 answers this route through
+	// beads.NewCachingStore, which forwards claims to ClaimFor and therefore
+	// exposes only ActorClaimer (internal/beads/caching_store_worker.go:14) —
+	// an assertion on the assignee shape answered 501 for a store that can
+	// claim. The probe keeps the slot the assertion had: it still runs before
+	// the first write.
+	if !beads.ClaimSupported(store) {
+		return nil, apierr.NotImplemented.Msg("worker claim: the resolved store implements neither the assignee- nor the actor-scoped claim; refusing to emulate it with a read-then-write, which would lose the single-winner guarantee")
 	}
 	writer, err := workerLeaseWriter(store)
 	if err != nil {
@@ -420,10 +410,17 @@ func (s *Server) humaHandleWorkerClaim(_ context.Context, input *WorkerClaimInpu
 	if reservation == beads.MetadataCASConflict {
 		return nil, apierr.ConflictWrongState.Msg("worker claim: session " + strings.TrimSpace(input.Body.SessionID) + " pointer changed while claiming " + id)
 	}
-	claimed, acquired, err := claimer.Claim(id, assignee)
+	claimed, acquired, err := beads.ClaimFor(store, id, assignee)
 	if err != nil {
 		_, _ = sessFront.ClearCurrentClaim(strings.TrimSpace(input.Body.SessionID), id)
-		if errors.Is(err, beads.ErrNotFound) {
+		// A wrapper can pass the probe on its own forwarding method and still
+		// find a backend behind it without either shape; that is the same
+		// absent capability, so it keeps the same typed 501 — and the
+		// reservation above is already unwound, so nothing was written.
+		switch {
+		case errors.Is(err, beads.ErrClaimUnsupported):
+			return nil, apierr.NotImplemented.Msg("worker claim: the resolved store's backend implements neither claim shape; the session pointer was unwound and nothing was claimed")
+		case errors.Is(err, beads.ErrNotFound):
 			return nil, apierr.BeadNotFound.Msg("worker claim: bead " + id + " not found")
 		}
 		return nil, apierr.Internal.Msg("worker claim: " + err.Error())
