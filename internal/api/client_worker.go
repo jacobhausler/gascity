@@ -119,6 +119,7 @@ type UpdateBeadOpts struct {
 	Status      *string
 	Description *string
 	Assignee    *string
+	Metadata    map[string]string
 }
 
 // UpdateBead applies a field update via POST /v0/city/{cityName}/bead/{id}/update.
@@ -128,14 +129,18 @@ func (c *Client) UpdateBead(id string, opts UpdateBeadOpts) error {
 	if err := c.requireCityScope(); err != nil {
 		return err
 	}
+	body := genclient.PostV0CityByCityNameBeadByIdUpdateJSONRequestBody{
+		Title:       opts.Title,
+		Status:      opts.Status,
+		Description: opts.Description,
+		Assignee:    opts.Assignee,
+	}
+	if len(opts.Metadata) > 0 {
+		body.Metadata = &opts.Metadata
+	}
 	resp, err := c.cw.PostV0CityByCityNameBeadByIdUpdateWithResponse(
 		context.Background(), c.cityName, id, nil,
-		genclient.PostV0CityByCityNameBeadByIdUpdateJSONRequestBody{
-			Title:       opts.Title,
-			Status:      opts.Status,
-			Description: opts.Description,
-			Assignee:    opts.Assignee,
-		})
+		body)
 	return checkMutation(resp, err)
 }
 

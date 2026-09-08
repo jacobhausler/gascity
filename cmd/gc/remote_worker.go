@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/gastownhall/gascity/internal/api"
+	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 )
 
@@ -335,6 +336,7 @@ var remoteBdFlagArity = map[string]map[string]int{
 		"-d": 1, "--description": 1,
 		"-t": 1, "--title": 1,
 		"-a": 1, "--assignee": 1,
+		"--set-metadata": 1,
 	},
 }
 
@@ -481,6 +483,7 @@ func remoteBdShow(client *api.Client, id string, flags []string, stdout, stderr 
 // cannot be expressed over the wire fails loudly instead of half-applying.
 func remoteBdUpdate(client *api.Client, id string, flags []string, stdout, stderr io.Writer) int {
 	opts := api.UpdateBeadOpts{}
+	metadata := map[string]string{}
 	for i := 0; i+1 < len(flags); i += 2 {
 		value := flags[i+1]
 		switch flags[i] {
@@ -492,6 +495,18 @@ func remoteBdUpdate(client *api.Client, id string, flags []string, stdout, stder
 			opts.Title = &value
 		case "-a", "--assignee":
 			opts.Assignee = &value
+		case "--set-metadata":
+			key, metaValue, ok := strings.Cut(value, "=")
+			key = strings.TrimSpace(key)
+			if !ok || key == "" {
+				fmt.Fprintf(stderr, "gc bd update: metadata %q must be key=value\n", value) //nolint:errcheck
+				return 1
+			}
+			if err := validateRemoteStepMetadata(key, metaValue); err != nil {
+				fmt.Fprintf(stderr, "gc bd update: %v\n", err) //nolint:errcheck
+				return 1
+			}
+			metadata[key] = metaValue
 		default:
 			// Unreachable while this switch and remoteBdFlagArity["update"] name
 			// the same flags. It stays because they are two lists, and a flag
@@ -500,10 +515,31 @@ func remoteBdUpdate(client *api.Client, id string, flags []string, stdout, stder
 			return 1
 		}
 	}
+	if len(metadata) > 0 {
+		opts.Metadata = metadata
+	}
 	if err := client.UpdateBead(id, opts); err != nil {
 		fmt.Fprintf(stderr, "gc bd update: %v\n", err) //nolint:errcheck
 		return 1
 	}
 	fmt.Fprintf(stdout, "updated %s\n", id) //nolint:errcheck
 	return 0
+}
+
+// validateRemoteStepMetadata is deliberately an allowlist. The remote worker
+// update route is a narrow formula-step completion leg, not a general metadata
+// tunnel: accepting arbitrary keys would let a worker write control-plane
+// state that this route does not own. The three step keys below are the full
+// vocabulary used by formula steps at this pin.
+func validateRemoteStepMetadata(key, value string) error {
+	switch key {
+	case beadmeta.OutcomeMetadataKey:
+		if value != "pass" && value != "fail" {
+			return fmt.Errorf("metadata %q must be pass or fail, got %q", key, value)
+		}
+	case beadmeta.StepIDMetadataKey, beadmeta.StepRefMetadataKey, beadmeta.StepTimeoutMetadataKey:
+	default:
+		return fmt.Errorf("metadata key %q is not supported against a remote city; remote formula-step updates accept only gc.outcome and the existing gc.step_* fields", key)
+	}
+	return nil
 }

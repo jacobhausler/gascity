@@ -19,8 +19,9 @@ import (
 // sent — so the responses are the smallest shape the client accepts.
 type remoteWorkerServer struct {
 	*httptest.Server
-	mu    sync.Mutex
-	paths []string
+	mu      sync.Mutex
+	paths   []string
+	updates []map[string]any
 	// current is what GET /worker/current answers with.
 	current string
 	// claimStatus is the status POST /worker/claim answers with (200 by default).
@@ -95,6 +96,11 @@ func newRemoteWorkerServer(t *testing.T) *remoteWorkerServer {
 	mux.HandleFunc("/v0/city/mc/bead/", record(func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/v0/city/mc/bead/"), "/update")
 		if strings.HasSuffix(r.URL.Path, "/update") {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			s.mu.Lock()
+			s.updates = append(s.updates, body)
+			s.mu.Unlock()
 			_ = json.NewEncoder(w).Encode(map[string]any{"status": "updated"})
 			return
 		}
@@ -103,6 +109,15 @@ func newRemoteWorkerServer(t *testing.T) *remoteWorkerServer {
 	s.Server = httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 	return s
+}
+
+func (s *remoteWorkerServer) lastUpdate() map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.updates) == 0 {
+		return nil
+	}
+	return s.updates[len(s.updates)-1]
 }
 
 func (s *remoteWorkerServer) sawPath(want string) bool {
@@ -504,6 +519,83 @@ func TestRemoteBdUpdateRefusesUnsupportedFlags(t *testing.T) {
 	}
 	if srv.sawPath("POST /v0/city/mc/bead/mc-7/update") {
 		t.Fatal("a refused update must not reach the city")
+	}
+}
+
+func TestRemoteBdUpdateAcceptsFormulaStepMetadata(t *testing.T) {
+	for _, outcome := range []string{"pass", "fail"} {
+		t.Run(outcome, func(t *testing.T) {
+			srv := newRemoteWorkerServer(t)
+			useRemoteWorkerContext(t, srv)
+			client, _, err := resolveWorkerTarget()
+			if err != nil {
+				t.Fatalf("resolveWorkerTarget: %v", err)
+			}
+
+			var out, errb bytes.Buffer
+			code, handled := remoteBd(client, []string{
+				"update", "formula-step",
+				"--set-metadata", "gc.outcome=" + outcome,
+				"--set-metadata", "gc.step_id=implement",
+				"--set-metadata", "gc.step_ref=westlands-verified-work.implement",
+				"--set-metadata", "gc.step_timeout=5m",
+				"--status", "closed",
+			}, &out, &errb)
+			if !handled || code != 0 {
+				t.Fatalf("handled=%v code=%d stderr=%q", handled, code, errb.String())
+			}
+			// The remote route takes the positional bead identifier verbatim. It
+			// does not resolve a title/name locally, which keeps name-vs-id
+			// behavior explicit for callers using an id-shaped formula-step ref.
+			if !srv.sawPath("POST /v0/city/mc/bead/formula-step/update") {
+				t.Fatalf("update route not called for the supplied bead id; saw %v", srv.paths)
+			}
+			body := srv.lastUpdate()
+			if body["status"] != "closed" {
+				t.Fatalf("status = %#v, want closed", body["status"])
+			}
+			metadata, ok := body["metadata"].(map[string]any)
+			if !ok {
+				t.Fatalf("metadata = %#v, want an object", body["metadata"])
+			}
+			want := map[string]string{
+				"gc.outcome":      outcome,
+				"gc.step_id":      "implement",
+				"gc.step_ref":     "westlands-verified-work.implement",
+				"gc.step_timeout": "5m",
+			}
+			for key, value := range want {
+				if metadata[key] != value {
+					t.Errorf("metadata[%q] = %#v, want %q", key, metadata[key], value)
+				}
+			}
+		})
+	}
+}
+
+func TestRemoteBdUpdateRefusesInvalidFormulaOutcomeBeforeWrite(t *testing.T) {
+	srv := newRemoteWorkerServer(t)
+	useRemoteWorkerContext(t, srv)
+	client, _, err := resolveWorkerTarget()
+	if err != nil {
+		t.Fatalf("resolveWorkerTarget: %v", err)
+	}
+	for _, metadata := range []string{"gc.outcome=done", "gc.step_unknown=value"} {
+		t.Run(metadata, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			code, handled := remoteBd(client, []string{
+				"update", "mc-7", "--set-metadata", metadata,
+			}, &out, &errb)
+			if !handled || code == 0 {
+				t.Fatalf("handled=%v code=%d, want a refusal", handled, code)
+			}
+			if !strings.Contains(errb.String(), strings.Split(metadata, "=")[0]) {
+				t.Fatalf("stderr = %q, want metadata-key refusal", errb.String())
+			}
+			if srv.sawPath("POST /v0/city/mc/bead/mc-7/update") {
+				t.Fatal("invalid formula metadata must not reach the city")
+			}
+		})
 	}
 }
 
