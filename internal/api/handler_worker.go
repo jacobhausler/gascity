@@ -352,13 +352,14 @@ func workerLeaseWriter(store beads.Store) (beads.ConditionalWriter, error) {
 // has no way to notice it was displaced, and a displaced worker that believes
 // it owns the bead writes over the real owner.
 //
-// The claim also stamps the two metadata keys the city reads — gc.claimed_at
-// and gc.lease_owner (internal/beadmeta/keys.go:61, :177) — as ONE
-// revision-fenced write that is fenced to the holder the claim produced. A
-// claim that writes neither is leaseless to every reaper in the estate, and a
-// leaseless claim is invisible to the primitives that would otherwise reclaim
-// it when the seat dies (AGENTS.md: a missing lease is not an infinitely stale
-// one). gc.claimed_at keeps its documented write-once contract
+// The claim also stamps the lease keys the city reads — gc.claimed_at and
+// gc.lease_owner (internal/beadmeta/keys.go:61, :177) — plus gc.session_id for
+// a non-control session claim (the identity the typed close fence reads), as
+// ONE revision-fenced write that is fenced to the holder the claim produced.
+// A claim that writes neither lease key is leaseless to every reaper in the
+// estate, and a leaseless claim is invisible to the primitives that would
+// otherwise reclaim it when the seat dies (AGENTS.md: a missing lease is not
+// an infinitely stale one). gc.claimed_at keeps its documented write-once contract
 // (internal/beadmeta/keys.go:54-61): a same-holder re-claim refreshes the
 // holder stamp and leaves the first-claim instant alone, because that instant
 // feeds the created→claimed latency transitions and re-stamping it silently
@@ -441,7 +442,7 @@ func (s *Server) humaHandleWorkerClaim(_ context.Context, input *WorkerClaimInpu
 	if err != nil {
 		return nil, err
 	}
-	if err := stampWorkerLease(writer, fence, assignee, nowUTC()); err != nil {
+	if err := stampWorkerLease(writer, fence, assignee, nowUTC(), strings.TrimSpace(input.Body.SessionID)); err != nil {
 		return nil, err
 	}
 	final, err := store.Get(id)
@@ -505,7 +506,7 @@ func (s *Server) humaHandleWorkerHeartbeat(_ context.Context, input *WorkerHeart
 	if err != nil {
 		return nil, err
 	}
-	if err := stampWorkerLease(writer, fence, assignee, nowUTC()); err != nil {
+	if err := stampWorkerLease(writer, fence, assignee, nowUTC(), ""); err != nil {
 		return nil, err
 	}
 	after, err := store.Get(id)
@@ -794,9 +795,13 @@ func closeRecordAlreadyPresent(bead beads.Bead, record map[string]string) bool {
 //   - gc.claimed_at STAYS WRITE-ONCE (internal/beadmeta/keys.go:54-61): it is
 //     written only when absent. gc.lease_owner is the compare-and-overwrite key
 //     and carries the holder on every pass.
-func stampWorkerLease(writer beads.ConditionalWriter, fence workerFence, assignee, at string) error {
+func stampWorkerLease(writer beads.ConditionalWriter, fence workerFence, assignee, at, sessionID string) error {
 	id := fence.bead.ID
 	fields := map[string]string{beadmeta.LeaseOwnerMetadataKey: assignee}
+	if sessionID != "" && !beadmeta.IsControlKind(strings.TrimSpace(fence.bead.Metadata[beadmeta.KindMetadataKey])) &&
+		strings.TrimSpace(fence.bead.Metadata[beadmeta.SessionIDMetadataKey]) != sessionID {
+		fields[beadmeta.SessionIDMetadataKey] = sessionID
+	}
 	if strings.TrimSpace(fence.bead.Metadata[beadmeta.ClaimedAtMetadataKey]) == "" {
 		fields[beadmeta.ClaimedAtMetadataKey] = at
 	}

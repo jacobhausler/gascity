@@ -79,6 +79,9 @@ func TestWorkerClaimWinsAndStampsSessionPointer(t *testing.T) {
 	if out.Body.Bead.Assignee != "worker-1" || out.Body.Bead.Status != "in_progress" {
 		t.Fatalf("claimed bead not held: %+v", out.Body.Bead)
 	}
+	if got := out.Body.Bead.Metadata[beadmeta.SessionIDMetadataKey]; got != f.session.ID {
+		t.Fatalf("claim did not stamp %s = %q, want %q for the remote worker's close fence", beadmeta.SessionIDMetadataKey, got, f.session.ID)
+	}
 
 	cur := &WorkerCurrentInput{SessionID: f.session.ID}
 	got, err := f.srv.humaHandleWorkerCurrent(context.Background(), cur)
