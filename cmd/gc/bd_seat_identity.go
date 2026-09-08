@@ -90,7 +90,7 @@ var bdSeatIdentityEnvKeys = []string{
 
 // bdSeatIdentityActorOverride decides which actor a seat-facing bd mutation is
 // forwarded under. ok=false means "forward the ambient actor exactly as today"
-// — every arm fails closed toward today's behaviour, because the substitution
+// — every arm fails closed toward today's behavior, because the substitution
 // only ever ADDS an acceptance bd would otherwise grant an identity-set member.
 //
 // fetched is the exact-ID guard's already-read beads; the override never opens
@@ -111,7 +111,7 @@ func bdSeatIdentityActorOverride(bdArgs []string, fetched map[string]beads.Bead,
 // and no environment: does this argv address exactly one bead through a verb
 // whose gate compares the actor against the assignee? It is exported to the
 // door function so a plain `gc bd show` never pays for an identity read, and
-// every refusal on this list is a return to today's behaviour.
+// every refusal on this list is a return to today's behavior.
 func bdSeatIdentityGatedWriteID(bdArgs []string) (string, bool) {
 	if len(bdArgs) == 0 {
 		return "", false

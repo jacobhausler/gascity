@@ -23,10 +23,6 @@ func seatIdentities() []string {
 	return []string{seatIDSess, seatNamePool}
 }
 
-func seatFetched(id, assignee string) map[string]beads.Bead {
-	return map[string]beads.Bead{id: {ID: id, Assignee: assignee}}
-}
-
 // TestBDSeatIdentityNameVsID covers the audit's T1-T5 matrix on every changed
 // verb: an identity arriving on the other channel is accepted, and an unrelated
 // actor is still refused.
@@ -141,7 +137,7 @@ func TestBDSeatIdentityNameVsID(t *testing.T) {
 		},
 		{
 			// A process whose actor is someone else's (an order subprocess, the
-			// supervisor, an operator shell) keeps today's behaviour exactly.
+			// supervisor, an operator shell) keeps today's behavior exactly.
 			name:       "foreign actor is never rewritten",
 			args:       []string{"close", id},
 			assignee:   seatIDSess,

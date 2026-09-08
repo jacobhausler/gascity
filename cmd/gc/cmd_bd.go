@@ -604,7 +604,7 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 	// channels for an unaliased pool seat. Forward the bead's own assignee
 	// instead, but only when membership in this session's identity set has been
 	// proven first — see bd_seat_identity.go. Refuses silently toward today's
-	// behaviour whenever the subject bead could not be read.
+	// behavior whenever the subject bead could not be read.
 	if actor, ok := bdSeatIdentityOverride(bdArgs, guardBeads, guardStore, cfg, cityPath); ok {
 		cmd.Env = bdSeatIdentityWithActor(cmd.Env, actor)
 	}
