@@ -204,6 +204,22 @@ func TestIsWorkRecordGatedBead(t *testing.T) {
 			bead: beads.Bead{Type: "task", Metadata: map[string]string{beadmeta.KindMetadataKey: beadmeta.KindRun}},
 			want: false,
 		},
+		{
+			name: "workflow step with step id is not gated",
+			bead: beads.Bead{
+				Type:     "task",
+				Metadata: map[string]string{beadmeta.StepIDMetadataKey: "mol-do-work.drain"},
+			},
+			want: false,
+		},
+		{
+			name: "workflow step with step ref is not gated",
+			bead: beads.Bead{
+				Type:     "task",
+				Metadata: map[string]string{beadmeta.StepRefMetadataKey: "mol-do-work.drain"},
+			},
+			want: false,
+		},
 		{name: "convoy bead is not gated", bead: beads.Bead{Type: "convoy"}, want: false},
 		{name: "message bead is not gated", bead: beads.Bead{Type: "message"}, want: false},
 	}
