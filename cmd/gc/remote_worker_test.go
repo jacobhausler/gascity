@@ -510,11 +510,13 @@ func TestRemoteBdUpdateRefusesUnsupportedFlags(t *testing.T) {
 // The identity ladder is alias, then agent, then session name, then session id
 // — most specific first, and deduplicated.
 func TestRemoteWorkerIdentitiesOrder(t *testing.T) {
-	t.Setenv("GC_ALIAS", "myrig/worker")
-	t.Setenv("GC_AGENT", "myrig/worker")
+	t.Setenv("GC_ALIAS", "myrig/worker-3")
+	t.Setenv("GC_AGENT", "myrig/worker-3")
 	t.Setenv("GC_SESSION_NAME", "worker-3")
+	t.Setenv("GC_TEMPLATE", "worker")
+	t.Setenv("GC_RIG", "myrig")
 	got := remoteWorkerIdentities("sess-1")
-	want := []string{"myrig/worker", "worker-3", "sess-1"}
+	want := []string{"myrig/worker-3", "worker-3", "sess-1", "myrig/worker", "worker"}
 	if len(got) != len(want) {
 		t.Fatalf("identities = %v, want %v", got, want)
 	}
@@ -522,6 +524,36 @@ func TestRemoteWorkerIdentitiesOrder(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("identities = %v, want %v", got, want)
 		}
+	}
+}
+
+// A remote pool worker carries the bare template in GC_TEMPLATE, while the
+// city's routed work may use the rig-qualified identity stamped by gc sling.
+// The remote leg must build the same route target set as the local leg.
+func TestRemoteHookCandidatesSelectsRigQualifiedTemplateRoute(t *testing.T) {
+	srv := newRemoteWorkerServer(t)
+	srv.listed = []map[string]any{{
+		"id": "mc-template", "title": "template-routed", "status": "open",
+		"metadata": map[string]string{"gc.routed_to": "myrig/worker"},
+	}}
+	useRemoteWorkerContext(t, srv)
+	t.Setenv("GC_ALIAS", "myrig/worker-3")
+	t.Setenv("GC_AGENT", "myrig/worker-3")
+	t.Setenv("GC_SESSION_NAME", "worker-3")
+	t.Setenv("GC_TEMPLATE", "worker")
+	t.Setenv("GC_RIG", "myrig")
+
+	client, _, err := resolveWorkerTarget()
+	if err != nil {
+		t.Fatalf("resolveWorkerTarget: %v", err)
+	}
+	var errb bytes.Buffer
+	got, errored := remoteHookCandidates(client, remoteWorkerIdentities("sess-1"), &errb)
+	if errored {
+		t.Fatalf("candidates reported an error; stderr=%q", errb.String())
+	}
+	if len(got) != 1 || got[0].ID != "mc-template" {
+		t.Fatalf("candidates = %+v, want template-routed bead; stderr=%q", got, errb.String())
 	}
 }
 
