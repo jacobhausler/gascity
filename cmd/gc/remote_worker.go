@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"slices"
 	"strings"
@@ -156,9 +158,17 @@ func remoteHookClaim(client *api.Client, opts hookCommandOptions, stdout, stderr
 
 	candidates, claimsErrored := remoteHookCandidates(client, identities, stderr)
 	for _, candidate := range candidates {
-		claimed, err := client.WorkerClaim(sessionID, assignee, candidate.ID, observed)
+		claimResult, err := client.WorkerClaim(context.Background(), api.WorkerVerbRequest{
+			SessionID:    sessionID,
+			Assignee:     assignee,
+			BeadID:       candidate.ID,
+			CurrentClaim: observed,
+		})
 		switch {
-		case errors.Is(err, api.ErrClaimConflict):
+		case err != nil && func() bool {
+			code, ok := api.WorkerVerbStatusCode(err)
+			return ok && code == http.StatusConflict
+		}():
 			// Someone else won, or this session already holds different work.
 			// Both are ordinary race outcomes; try the next candidate.
 			continue
@@ -170,6 +180,7 @@ func remoteHookClaim(client *api.Client, opts hookCommandOptions, stdout, stderr
 			claimsErrored = true
 			continue
 		}
+		claimed := claimResult.Bead
 		result := hookClaimJSONResult{
 			SchemaVersion: "1",
 			OK:            true,
@@ -267,11 +278,15 @@ func writeRemoteHookClaimResult(client *api.Client, sessionID string, result hoo
 		if !minted {
 			return 1
 		}
-		released, relErr := client.WorkerRelease(sessionID, result.Assignee, result.BeadID)
+		releaseResult, relErr := client.WorkerRelease(context.Background(), api.WorkerVerbRequest{
+			SessionID: sessionID,
+			Assignee:  result.Assignee,
+			BeadID:    result.BeadID,
+		})
 		switch {
 		case relErr != nil:
 			fmt.Fprintf(stderr, "gc hook --claim: releasing undelivered claim %s: %v\n", result.BeadID, relErr) //nolint:errcheck
-		case !released:
+		case releaseResult.Skipped:
 			fmt.Fprintf(stderr, "gc hook --claim: undelivered claim %s was no longer ours to release\n", result.BeadID) //nolint:errcheck
 		}
 		return 1
@@ -279,15 +294,13 @@ func writeRemoteHookClaimResult(client *api.Client, sessionID string, result hoo
 	return 0
 }
 
-// remoteWorkerBdVerbs is the `gc bd` subset a worker uses. Everything else
-// stays refused under a remote target: `gc bd` is otherwise a passthrough to a
-// bd binary reading a local ledger, and pretending otherwise over the wire
-// would silently answer a different question than the operator asked.
+// remoteWorkerBdVerbs is the pre-existing non-lifecycle subset of `gc bd`.
+// Lifecycle verbs are intercepted by routeBdWorkerRemote before this legacy
+// path, so an untyped close can never be sent by doBd to a remote city.
 var remoteWorkerBdVerbs = map[string]bool{
 	"show":    true,
 	"update":  true,
 	"comment": true,
-	"close":   true,
 }
 
 // remoteBdFlagArity is the accept-list for the worker `gc bd` subset: for each
@@ -402,13 +415,6 @@ func remoteBd(client *api.Client, args []string, stdout, stderr io.Writer) (code
 	switch verb {
 	case "show":
 		return remoteBdShow(client, id, flags, stdout, stderr), true
-	case "close":
-		if err := client.WorkerCloseBead(id); err != nil {
-			fmt.Fprintf(stderr, "gc bd close: %v\n", err) //nolint:errcheck
-			return 1, true
-		}
-		fmt.Fprintf(stdout, "closed %s\n", id) //nolint:errcheck
-		return 0, true
 	case "comment":
 		text := strings.TrimSpace(strings.Join(operands, " "))
 		if text == "" {

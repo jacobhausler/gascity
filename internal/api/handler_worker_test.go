@@ -15,7 +15,7 @@ import (
 // which is all any worker operation needs.
 type workerFixture struct {
 	srv     *Server
-	store   *beads.MemStore
+	store   *workerAtomicStoreDraft
 	session beads.Bead
 	work    beads.Bead
 }
@@ -23,7 +23,7 @@ type workerFixture struct {
 func newWorkerFixture(t *testing.T) *workerFixture {
 	t.Helper()
 	st := newFakeState(t)
-	store := beads.NewMemStore()
+	store := &workerAtomicStoreDraft{Store: beads.NewAtomicCloseMemStore()}
 	st.cityBeadStore = store
 	st.stores = map[string]beads.Store{"myrig": store}
 
@@ -472,8 +472,15 @@ func TestWorkerDrainAckLadderMatchesTheClaimingLadder(t *testing.T) {
 
 func TestWorkerCloseClosesTheBead(t *testing.T) {
 	f := newWorkerFixture(t)
+	if _, err := f.claim(t); err != nil {
+		t.Fatalf("claim: %v", err)
+	}
 	in := &WorkerCloseInput{}
+	in.Body.SessionID = f.session.ID
+	in.Body.Assignee = "worker-1"
 	in.Body.BeadID = f.work.ID
+	in.Body.Outcome = beadmeta.WorkOutcomeNoOp
+	in.Body.Reason = "test close"
 	if _, err := f.srv.humaHandleWorkerClose(context.Background(), in); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -570,7 +577,11 @@ func TestWorkerClaimAndCloseThroughTheAPI(t *testing.T) {
 		t.Fatalf("current: %v", err)
 	}
 	closeIn := &WorkerCloseInput{}
+	closeIn.Body.SessionID = f.session.ID
+	closeIn.Body.Assignee = "worker-1"
 	closeIn.Body.BeadID = curOut.Body.BeadID
+	closeIn.Body.Outcome = beadmeta.WorkOutcomeNoOp
+	closeIn.Body.Reason = "test close"
 	if _, err := f.srv.humaHandleWorkerClose(context.Background(), closeIn); err != nil {
 		t.Fatalf("close: %v", err)
 	}

@@ -338,23 +338,46 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 	if strings.TrimSpace(cityName) == "" {
 		restore := applyBdRemoteSelection(cityURLArg, remoteCityNameArg)
 		client, isRemote, rerr := resolveWorkerTarget()
-		restore()
 		if rerr != nil {
+			restore()
 			fmt.Fprintf(stderr, "gc bd: %v\n", rerr) //nolint:errcheck // best-effort stderr
 			return 1
 		}
 		if isRemote {
+			// Keep the extracted selectors active until both remote dispatchers
+			// have resolved their target. Restoring them before
+			// routeBdWorkerRemote would make the new lifecycle router see a
+			// local target and fall through to the stale generic refusal.
+			defer restore()
+			if code, handled := routeBdWorkerRemote(bdArgs, stdout, stderr); handled {
+				return code
+			}
 			if code, handled := remoteBd(client, bdArgs, stdout, stderr); handled {
 				return code
 			}
-			fmt.Fprintf(stderr, "gc bd: %v\n", errRemoteNotSupportedYet())                                                        //nolint:errcheck // best-effort stderr
-			fmt.Fprintln(stderr, "  hint: against a remote city, gc bd supports the worker subset: show, update, comment, close") //nolint:errcheck
+			fmt.Fprint(stderr, workerSubsetRefusal(bdArgs[0])) //nolint:errcheck // best-effort stderr
 			return 1
 		}
+		restore()
 	}
 
 	cityPath, err := resolveBdCity(cityName)
 	if err != nil {
+		// The one thing resolveBdCity cannot resolve is a REMOTE target —
+		// resolveCity's capability gate refuses it (remote_target.go:135). Today
+		// that is a hard exit; with the worker subset admitted (cr-gdeav.5.4
+		// draft) it is the branch point: a worker seat that is not on the city
+		// host routes its claim / heartbeat / release / typed close over the
+		// control plane, and every other verb still refuses, now naming the
+		// subset it could use.
+		//
+		// The remote resolver is consulted HERE and not earlier on purpose. A
+		// local seat never pays for a contexts.toml read it did not already
+		// make, and a malformed context cannot fail a local command that used
+		// to work: isRemote must be true before anything changes.
+		if code, routed := routeBdWorkerRemote(bdArgs, stdout, stderr); routed {
+			return code
+		}
 		fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
 	}

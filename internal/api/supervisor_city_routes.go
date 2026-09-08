@@ -418,10 +418,11 @@ func (sm *SupervisorMux) registerCityRoutes() {
 	// inbound webhook receiver, deliberately outside the typed layer so it can
 	// verify a raw body (supervisor.go, and supervisor_nonhuma_guard_test.go).
 	cityPost(sm, "/worker/claim", (*Server).humaHandleWorkerClaim, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusNotImplemented, http.StatusServiceUnavailable))
+	cityPost(sm, "/worker/heartbeat", (*Server).humaHandleWorkerHeartbeat, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusNotImplemented, http.StatusServiceUnavailable))
 	cityDelete(sm, "/worker/claim", (*Server).humaHandleWorkerRelease, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented, http.StatusServiceUnavailable))
 	cityGet(sm, "/worker/current", (*Server).humaHandleWorkerCurrent, errorStatuses(http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable))
 	cityPost(sm, "/worker/drain-ack", (*Server).humaHandleWorkerDrainAck, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented, http.StatusServiceUnavailable))
-	cityPost(sm, "/worker/close", (*Server).humaHandleWorkerClose, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable))
+	cityPost(sm, "/worker/close", (*Server).humaHandleWorkerClose, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusNotImplemented, http.StatusServiceUnavailable))
 	cityPost(sm, "/worker/comment", (*Server).humaHandleWorkerComment, errorStatuses(http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusNotImplemented, http.StatusServiceUnavailable))
 
 	// Durable session waits (session coordination-class).

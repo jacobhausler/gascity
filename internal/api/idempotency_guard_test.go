@@ -92,6 +92,7 @@ var exemptFromIdempotency = map[string]bool{
 	"post-v0-city-by-city-name-worker-close":                   true,
 	"post-v0-city-by-city-name-worker-comment":                 true,
 	"post-v0-city-by-city-name-worker-drain-ack":               true,
+	"post-v0-city-by-city-name-worker-heartbeat":               true,
 	"rotate-events":               true,
 	"trigger-maintenance-dolt-gc": true,
 }

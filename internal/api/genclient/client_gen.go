@@ -1033,6 +1033,7 @@ type AgentPatch struct {
 	Provider                *string           `json:"Provider"`
 	ResumeCommand           *string           `json:"ResumeCommand"`
 	Rig                     string            `json:"Rig"`
+	RuntimeProvider         *string           `json:"RuntimeProvider"`
 	ScaleCheck              *string           `json:"ScaleCheck"`
 	Scope                   *string           `json:"Scope"`
 	Session                 *string           `json:"Session"`
@@ -3306,6 +3307,7 @@ type RigPatch struct {
 	Name             string            `json:"Name"`
 	Path             *string           `json:"Path"`
 	Prefix           *string           `json:"Prefix"`
+	RuntimeProvider  *string           `json:"RuntimeProvider"`
 	Suspended        *bool             `json:"Suspended"`
 	SuspendedOnStart *bool             `json:"SuspendedOnStart"`
 }
@@ -8738,21 +8740,6 @@ type WebhookRejectedPayload struct {
 	Webhook string `json:"webhook"`
 }
 
-// WorkerClaimInputBody defines model for WorkerClaimInputBody.
-type WorkerClaimInputBody struct {
-	// Assignee Identity the bead is claimed for. This is the claim actor, not the transport identity.
-	Assignee string `json:"assignee"`
-
-	// BeadId Work bead to claim.
-	BeadId string `json:"bead_id"`
-
-	// CurrentClaim Current-claim pointer the caller observed before claiming, echoed back as the compare-and-swap's expected value. Omit when the caller did not read one; the server then derives the expected value from the stored pointer.
-	CurrentClaim *string `json:"current_claim,omitempty"`
-
-	// SessionId Session bead ID of the claiming session. The session's current-claim pointer is reserved before the claim and released again if the claim is lost.
-	SessionId string `json:"session_id"`
-}
-
 // WorkerClaimOutputBody defines model for WorkerClaimOutputBody.
 type WorkerClaimOutputBody struct {
 	Bead Bead `json:"bead"`
@@ -8763,8 +8750,34 @@ type WorkerClaimOutputBody struct {
 
 // WorkerCloseInputBody defines model for WorkerCloseInputBody.
 type WorkerCloseInputBody struct {
-	// BeadId Work bead to close.
+	// Assignee The holder performing the close (the same identity the claim took). A close without a holder is refused: the record would attribute the work to whatever the caller typed.
+	Assignee string `json:"assignee"`
+
+	// BeadId Bead to close.
 	BeadId string `json:"bead_id"`
+
+	// Branch Branch the commit must be reachable on. Required by shipped.
+	Branch *string `json:"branch,omitempty"`
+
+	// Commit Commit that satisfies the close. Required by shipped.
+	Commit *string `json:"commit,omitempty"`
+
+	// Outcome Typed close disposition: shipped, no-op, blocked or abandoned.
+	Outcome string `json:"outcome"`
+
+	// Reason Why the close is what it is. Required for every disposition except shipped.
+	Reason *string `json:"reason,omitempty"`
+
+	// SessionId gc session the close is issued for. Enforced: when the bead carries a session stamp, a different session is refused.
+	SessionId *string `json:"session_id,omitempty"`
+}
+
+// WorkerCloseOutputBody defines model for WorkerCloseOutputBody.
+type WorkerCloseOutputBody struct {
+	Bead Bead `json:"bead"`
+
+	// Status Close result: closed, or already_closed when the same holder retries a close whose record already landed.
+	Status string `json:"status"`
 }
 
 // WorkerCommentInputBody defines model for WorkerCommentInputBody.
@@ -8802,6 +8815,21 @@ type WorkerDrainAckOutputBody struct {
 
 // WorkerDrainAckOutputBodyReleaseStatus Outcome of the release the acknowledgement attempted: released when the CAS applied, skipped when the bead no longer named this session's identity. Empty when the session held nothing.
 type WorkerDrainAckOutputBodyReleaseStatus string
+
+// WorkerHeartbeatOutputBody defines model for WorkerHeartbeatOutputBody.
+type WorkerHeartbeatOutputBody struct {
+	// ClaimedAt First-claim instant (gc.claimed_at), RFC3339 UTC. Write-once: a heartbeat reports it and never re-stamps it.
+	ClaimedAt *string `json:"claimed_at,omitempty"`
+
+	// LeaseOwner Lease holder the refresh re-affirmed (gc.lease_owner).
+	LeaseOwner *string `json:"lease_owner,omitempty"`
+
+	// LeaseScope Which lease this refresh reached. bead-metadata means the bead's gc.lease_owner stamp and revision moved; bd's native lease table (bd reclaim's selector) is NOT reachable from this route.
+	LeaseScope string `json:"lease_scope"`
+
+	// Status Heartbeat result.
+	Status string `json:"status"`
+}
 
 // WorkerOperationEventPayload defines model for WorkerOperationEventPayload.
 type WorkerOperationEventPayload struct {
@@ -8859,26 +8887,31 @@ type WorkerOperationEventPayload struct {
 	Unpriced *bool `json:"unpriced,omitempty"`
 }
 
-// WorkerReleaseInputBody defines model for WorkerReleaseInputBody.
-type WorkerReleaseInputBody struct {
-	// Assignee Expected current assignee. The release is applied only while the bead still names this holder.
-	Assignee string `json:"assignee"`
-
-	// BeadId Work bead to release.
-	BeadId string `json:"bead_id"`
-
-	// SessionId Session bead ID whose current-claim pointer is cleared alongside the release. Optional: a release with no session named touches only the work bead.
-	SessionId *string `json:"session_id,omitempty"`
-}
-
 // WorkerReleaseOutputBody defines model for WorkerReleaseOutputBody.
 type WorkerReleaseOutputBody struct {
+	Bead Bead `json:"bead"`
+
 	// Status Release result: released when the CAS applied, skipped when the bead no longer named the expected holder.
 	Status WorkerReleaseOutputBodyStatus `json:"status"`
 }
 
 // WorkerReleaseOutputBodyStatus Release result: released when the CAS applied, skipped when the bead no longer named the expected holder.
 type WorkerReleaseOutputBodyStatus string
+
+// WorkerSessionBody defines model for WorkerSessionBody.
+type WorkerSessionBody struct {
+	// Assignee Claimant identity (a pool seat or crew holder name). This is the value the store compares.
+	Assignee string `json:"assignee"`
+
+	// BeadId Bead the verb acts on.
+	BeadId string `json:"bead_id"`
+
+	// CurrentClaim Current-claim pointer the caller observed before claiming; it fences session-pointer reservation.
+	CurrentClaim *string `json:"current_claim,omitempty"`
+
+	// SessionId gc session the verb is issued for; recorded for attribution, never used as the ownership pointer.
+	SessionId *string `json:"session_id,omitempty"`
+}
 
 // WorkflowAttemptSummary defines model for WorkflowAttemptSummary.
 type WorkflowAttemptSummary struct {
@@ -10015,6 +10048,12 @@ type PostV0CityByCityNameWorkerDrainAckParams struct {
 	XGCRequest string `json:"X-GC-Request"`
 }
 
+// PostV0CityByCityNameWorkerHeartbeatParams defines parameters for PostV0CityByCityNameWorkerHeartbeat.
+type PostV0CityByCityNameWorkerHeartbeatParams struct {
+	// XGCRequest Anti-CSRF header required on mutation requests. Any non-empty value is accepted; the header's presence is what the server checks.
+	XGCRequest string `json:"X-GC-Request"`
+}
+
 // DeleteV0CityByCityNameWorkflowByWorkflowIdParams defines parameters for DeleteV0CityByCityNameWorkflowByWorkflowId.
 type DeleteV0CityByCityNameWorkflowByWorkflowIdParams struct {
 	// ScopeKind Scope kind (city or rig).
@@ -10211,10 +10250,10 @@ type CreateSessionJSONRequestBody = SessionCreateBody
 type PostV0CityByCityNameSlingJSONRequestBody = SlingInputBody
 
 // DeleteV0CityByCityNameWorkerClaimJSONRequestBody defines body for DeleteV0CityByCityNameWorkerClaim for application/json ContentType.
-type DeleteV0CityByCityNameWorkerClaimJSONRequestBody = WorkerReleaseInputBody
+type DeleteV0CityByCityNameWorkerClaimJSONRequestBody = WorkerSessionBody
 
 // PostV0CityByCityNameWorkerClaimJSONRequestBody defines body for PostV0CityByCityNameWorkerClaim for application/json ContentType.
-type PostV0CityByCityNameWorkerClaimJSONRequestBody = WorkerClaimInputBody
+type PostV0CityByCityNameWorkerClaimJSONRequestBody = WorkerSessionBody
 
 // PostV0CityByCityNameWorkerCloseJSONRequestBody defines body for PostV0CityByCityNameWorkerClose for application/json ContentType.
 type PostV0CityByCityNameWorkerCloseJSONRequestBody = WorkerCloseInputBody
@@ -10224,6 +10263,9 @@ type PostV0CityByCityNameWorkerCommentJSONRequestBody = WorkerCommentInputBody
 
 // PostV0CityByCityNameWorkerDrainAckJSONRequestBody defines body for PostV0CityByCityNameWorkerDrainAck for application/json ContentType.
 type PostV0CityByCityNameWorkerDrainAckJSONRequestBody = WorkerDrainAckInputBody
+
+// PostV0CityByCityNameWorkerHeartbeatJSONRequestBody defines body for PostV0CityByCityNameWorkerHeartbeat for application/json ContentType.
+type PostV0CityByCityNameWorkerHeartbeatJSONRequestBody = WorkerSessionBody
 
 // AsAdapterEventPayload returns the union data inside the EventPayload as a AdapterEventPayload
 func (t EventPayload) AsAdapterEventPayload() (AdapterEventPayload, error) {
@@ -19757,6 +19799,11 @@ type ClientInterface interface {
 
 	PostV0CityByCityNameWorkerDrainAck(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, body PostV0CityByCityNameWorkerDrainAckJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// PostV0CityByCityNameWorkerHeartbeatWithBody request with any body
+	PostV0CityByCityNameWorkerHeartbeatWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	PostV0CityByCityNameWorkerHeartbeat(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, body PostV0CityByCityNameWorkerHeartbeatJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// DeleteV0CityByCityNameWorkflowByWorkflowId request
 	DeleteV0CityByCityNameWorkflowByWorkflowId(ctx context.Context, cityName string, workflowId string, params *DeleteV0CityByCityNameWorkflowByWorkflowIdParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -22310,6 +22357,30 @@ func (c *Client) PostV0CityByCityNameWorkerDrainAckWithBody(ctx context.Context,
 
 func (c *Client) PostV0CityByCityNameWorkerDrainAck(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, body PostV0CityByCityNameWorkerDrainAckJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPostV0CityByCityNameWorkerDrainAckRequest(c.Server, cityName, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerHeartbeatWithBody(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerHeartbeatRequestWithBody(c.Server, cityName, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) PostV0CityByCityNameWorkerHeartbeat(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, body PostV0CityByCityNameWorkerHeartbeatJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewPostV0CityByCityNameWorkerHeartbeatRequest(c.Server, cityName, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -32694,6 +32765,66 @@ func NewPostV0CityByCityNameWorkerDrainAckRequestWithBody(server string, cityNam
 	return req, nil
 }
 
+// NewPostV0CityByCityNameWorkerHeartbeatRequest calls the generic PostV0CityByCityNameWorkerHeartbeat builder with application/json body
+func NewPostV0CityByCityNameWorkerHeartbeatRequest(server string, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, body PostV0CityByCityNameWorkerHeartbeatJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewPostV0CityByCityNameWorkerHeartbeatRequestWithBody(server, cityName, params, "application/json", bodyReader)
+}
+
+// NewPostV0CityByCityNameWorkerHeartbeatRequestWithBody generates requests for PostV0CityByCityNameWorkerHeartbeat with any type of body
+func NewPostV0CityByCityNameWorkerHeartbeatRequestWithBody(server string, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cityName", cityName, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/v0/city/%s/worker/heartbeat", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest("POST", queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-GC-Request", params.XGCRequest, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-GC-Request", headerParam0)
+
+	}
+
+	return req, nil
+}
+
 // NewDeleteV0CityByCityNameWorkflowByWorkflowIdRequest generates requests for DeleteV0CityByCityNameWorkflowByWorkflowId
 func NewDeleteV0CityByCityNameWorkflowByWorkflowIdRequest(server string, cityName string, workflowId string, params *DeleteV0CityByCityNameWorkflowByWorkflowIdParams) (*http.Request, error) {
 	var err error
@@ -33802,6 +33933,11 @@ type ClientWithResponsesInterface interface {
 	PostV0CityByCityNameWorkerDrainAckWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerDrainAckResponse, error)
 
 	PostV0CityByCityNameWorkerDrainAckWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerDrainAckParams, body PostV0CityByCityNameWorkerDrainAckJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerDrainAckResponse, error)
+
+	// PostV0CityByCityNameWorkerHeartbeatWithBodyWithResponse request with any body
+	PostV0CityByCityNameWorkerHeartbeatWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerHeartbeatResponse, error)
+
+	PostV0CityByCityNameWorkerHeartbeatWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, body PostV0CityByCityNameWorkerHeartbeatJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerHeartbeatResponse, error)
 
 	// DeleteV0CityByCityNameWorkflowByWorkflowIdWithResponse request
 	DeleteV0CityByCityNameWorkflowByWorkflowIdWithResponse(ctx context.Context, cityName string, workflowId string, params *DeleteV0CityByCityNameWorkflowByWorkflowIdParams, reqEditors ...RequestEditorFn) (*DeleteV0CityByCityNameWorkflowByWorkflowIdResponse, error)
@@ -38177,7 +38313,7 @@ func (r PostV0CityByCityNameWorkerClaimResponse) StatusCode() int {
 type PostV0CityByCityNameWorkerCloseResponse struct {
 	Body                      []byte
 	HTTPResponse              *http.Response
-	JSON200                   *OKResponseBody
+	JSON200                   *WorkerCloseOutputBody
 	ApplicationproblemJSON400 *ErrorModel
 	ApplicationproblemJSON401 *ErrorModel
 	ApplicationproblemJSON403 *ErrorModel
@@ -38185,6 +38321,7 @@ type PostV0CityByCityNameWorkerCloseResponse struct {
 	ApplicationproblemJSON409 *ErrorModel
 	ApplicationproblemJSON422 *ErrorModel
 	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON501 *ErrorModel
 	ApplicationproblemJSON503 *ErrorModel
 }
 
@@ -38285,6 +38422,37 @@ func (r PostV0CityByCityNameWorkerDrainAckResponse) Status() string {
 
 // StatusCode returns HTTPResponse.StatusCode
 func (r PostV0CityByCityNameWorkerDrainAckResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+type PostV0CityByCityNameWorkerHeartbeatResponse struct {
+	Body                      []byte
+	HTTPResponse              *http.Response
+	JSON200                   *WorkerHeartbeatOutputBody
+	ApplicationproblemJSON400 *ErrorModel
+	ApplicationproblemJSON401 *ErrorModel
+	ApplicationproblemJSON403 *ErrorModel
+	ApplicationproblemJSON404 *ErrorModel
+	ApplicationproblemJSON409 *ErrorModel
+	ApplicationproblemJSON422 *ErrorModel
+	ApplicationproblemJSON500 *ErrorModel
+	ApplicationproblemJSON501 *ErrorModel
+	ApplicationproblemJSON503 *ErrorModel
+}
+
+// Status returns HTTPResponse.Status
+func (r PostV0CityByCityNameWorkerHeartbeatResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r PostV0CityByCityNameWorkerHeartbeatResponse) StatusCode() int {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.StatusCode
 	}
@@ -40294,6 +40462,23 @@ func (c *ClientWithResponses) PostV0CityByCityNameWorkerDrainAckWithResponse(ctx
 		return nil, err
 	}
 	return ParsePostV0CityByCityNameWorkerDrainAckResponse(rsp)
+}
+
+// PostV0CityByCityNameWorkerHeartbeatWithBodyWithResponse request with arbitrary body returning *PostV0CityByCityNameWorkerHeartbeatResponse
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerHeartbeatWithBodyWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerHeartbeatResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerHeartbeatWithBody(ctx, cityName, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerHeartbeatResponse(rsp)
+}
+
+func (c *ClientWithResponses) PostV0CityByCityNameWorkerHeartbeatWithResponse(ctx context.Context, cityName string, params *PostV0CityByCityNameWorkerHeartbeatParams, body PostV0CityByCityNameWorkerHeartbeatJSONRequestBody, reqEditors ...RequestEditorFn) (*PostV0CityByCityNameWorkerHeartbeatResponse, error) {
+	rsp, err := c.PostV0CityByCityNameWorkerHeartbeat(ctx, cityName, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParsePostV0CityByCityNameWorkerHeartbeatResponse(rsp)
 }
 
 // DeleteV0CityByCityNameWorkflowByWorkflowIdWithResponse request returning *DeleteV0CityByCityNameWorkflowByWorkflowIdResponse
@@ -50349,7 +50534,7 @@ func ParsePostV0CityByCityNameWorkerCloseResponse(rsp *http.Response) (*PostV0Ci
 
 	switch {
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
-		var dest OKResponseBody
+		var dest WorkerCloseOutputBody
 		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
 			return nil, err
 		}
@@ -50403,6 +50588,13 @@ func ParsePostV0CityByCityNameWorkerCloseResponse(rsp *http.Response) (*PostV0Ci
 			return nil, err
 		}
 		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON501 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
 		var dest ErrorModel
@@ -50607,6 +50799,95 @@ func ParsePostV0CityByCityNameWorkerDrainAckResponse(rsp *http.Response) (*PostV
 			return nil, err
 		}
 		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 500:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON500 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 501:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON501 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParsePostV0CityByCityNameWorkerHeartbeatResponse parses an HTTP response from a PostV0CityByCityNameWorkerHeartbeatWithResponse call
+func ParsePostV0CityByCityNameWorkerHeartbeatResponse(rsp *http.Response) (*PostV0CityByCityNameWorkerHeartbeatResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &PostV0CityByCityNameWorkerHeartbeatResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest WorkerHeartbeatOutputBody
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 404:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON404 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorModel
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest ErrorModel
