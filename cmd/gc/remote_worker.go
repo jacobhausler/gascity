@@ -73,18 +73,32 @@ func remoteWorkerSessionID() (string, error) {
 // does not have.
 func remoteWorkerIdentities(sessionID string) []string {
 	var out []string
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" || slices.Contains(out, candidate) {
+			return
+		}
+		out = append(out, candidate)
+	}
 	for _, candidate := range []string{
 		strings.TrimSpace(os.Getenv("GC_ALIAS")),
 		strings.TrimSpace(os.Getenv("GC_AGENT")),
 		strings.TrimSpace(os.Getenv("GC_SESSION_NAME")),
 		sessionID,
 	} {
-		if candidate == "" {
-			continue
+		add(candidate)
+	}
+	template := strings.TrimSpace(os.Getenv("GC_TEMPLATE"))
+	if template != "" {
+		// GC_TEMPLATE is commonly bare inside a rig. Recover the qualified
+		// route from the canonical runtime identity projection, including the
+		// fallback that derives a rig from a qualified alias or agent when the
+		// provider omitted GC_RIG.
+		rig := agentScriptRig()
+		if rig != "" && !strings.Contains(template, "/") {
+			add(rig + "/" + template)
 		}
-		if !slices.Contains(out, candidate) {
-			out = append(out, candidate)
-		}
+		add(template)
 	}
 	return out
 }
