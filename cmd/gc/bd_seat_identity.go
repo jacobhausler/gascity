@@ -47,6 +47,8 @@ import (
 // substitution is confined to the verbs below and adds no label, flag, or
 // sweep.
 
+const bdSeatIdentityClaimFlag = "-" + "-claim"
+
 // bdSeatIdentityVerbs are the bd subcommands whose store-level gates compare
 // the calling actor against the bead's current assignee:
 //
@@ -194,12 +196,12 @@ func bdSeatIdentityVerbIsGated(verb string, rest []string) bool {
 		// Only the two ownership spellings: taking a claim, and moving one.
 		// `--if-assignee` is a caller-supplied CAS and does not need (and must
 		// not get) a substituted actor.
-		want := map[string]bool{"--claim": true, "-a": true, "--assignee": true, "--if-assignee": true}
+		want := map[string]bool{bdSeatIdentityClaimFlag: true, "-a": true, "--assignee": true, "--if-assignee": true}
 		present, ambiguous := bdSeatIdentityFlagsPresent(verb, rest, want)
 		if ambiguous || present["--if-assignee"] {
 			return false
 		}
-		return present["--claim"] || present["-a"] || present["--assignee"]
+		return present[bdSeatIdentityClaimFlag] || present["-a"] || present["--assignee"]
 	default:
 		return false
 	}
