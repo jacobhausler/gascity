@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -79,7 +80,7 @@ func waitForStoreClosed(t *testing.T, store *latchedCloseStore, what string) {
 		if time.Now().After(deadline) {
 			t.Fatalf("%s was never closed — the frame leaked the handle it opened", what)
 		}
-		time.Sleep(5 * time.Millisecond)
+		runtime.Gosched()
 	}
 }
 
