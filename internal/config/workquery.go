@@ -227,6 +227,10 @@ func bdReadyPoolDemandShell(limitFlag string, topo QueryTopology) string {
 	return readyReaderCommand(topo.FederatedReady) + bdReadyIncludeEphemeralArg(topo.includeEphemeralReady()) + ` --metadata-field "` + beadmeta.RoutedToMetadataKey + `=$target"` + PoolDemandServeRulesForQuery().ShellArgs() + ` --json ` + limitFlag
 }
 
+func bdReadyPoolDemandLiveWorkflowShell(limitFlag string, topo QueryTopology) string {
+	return readyReaderCommand(topo.FederatedReady) + bdReadyIncludeEphemeralArg(topo.includeEphemeralReady()) + ` --metadata-field "` + beadmeta.RoutedToMetadataKey + `=$target" --metadata-field "` + beadmeta.RootBeadIDMetadataKey + `"` + PoolDemandServeRulesForQuery().ShellArgs() + ` --json ` + limitFlag
+}
+
 // bdReadyPoolDemandMigrationShell is a temporary raw compatibility probe for
 // graph.v2 workflow roots created before gc.routed_to root stamping shipped.
 // It is scoped to workflow roots so gc.run_target remains an authoring hint
@@ -360,7 +364,7 @@ func preferExecutablePoolDemandScript() string {
 
 func routedReadyTierCommand(topo QueryTopology) string {
 	// The shared predicate stays order-free so the count-form does no wasted
-	// sorting; the worker first-row path rides the reader's canonical
+	// sorting; the worker first-row path probes live workflow steps first using
 	// (priority, created_at, id) default order — both readers default to it
 	// (bd ready's default --sort priority; the federated reader's merged
 	// beads.SortBeadsReadyOrder). An explicit --sort oldest here makes the
@@ -375,7 +379,10 @@ func routedReadyTierCommand(topo QueryTopology) string {
 	// routed work behind it to fall through to instead of idle-exiting; the
 	// hook layer (filterUnreadyHookCandidates) strips the blocked head from
 	// the result.
-	return bdReadyPoolDemandShell("--limit=20", topo) + readyReaderStderrSink(topo.FederatedReady)
+	live := bdReadyPoolDemandLiveWorkflowShell("--limit=20", topo) + readyReaderStderrSink(topo.FederatedReady)
+	aged := bdReadyPoolDemandShell("--limit=20", topo) + readyReaderStderrSink(topo.FederatedReady)
+	return `live=$(` + live + `)` + readyReaderFailurePropagation(topo.FederatedReady) + `; ` +
+		`[ -n "$live" ] && [ "$live" != "[]" ] && printf "%s" "$live" || ` + aged
 }
 
 // poolDemandCountShell emits the reconciler count-form for target: it counts

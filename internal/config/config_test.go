@@ -1901,6 +1901,25 @@ func TestEffectiveWorkQueryRoutedTierServesCanonicalPriorityOrder(t *testing.T) 
 	}
 }
 
+func TestEffectiveWorkQueryServesLiveWorkflowStepsBeforeAgedTier(t *testing.T) {
+	a := Agent{Name: "mayor"}
+	got := a.EffectiveWorkQuery()
+
+	liveWorkflowTier := `bd ready --metadata-field "gc.routed_to=$target" --metadata-field "gc.root_bead_id" --unassigned --exclude-type=epic --exclude-label "hold:mayor" --exclude-label "hold:external" --json --limit=20`
+	agedTier := `bd ready --metadata-field "gc.routed_to=$target" --unassigned --exclude-type=epic --exclude-label "hold:mayor" --exclude-label "hold:external" --json --limit=20`
+	liveIndex := strings.Index(got, liveWorkflowTier)
+	agedIndex := strings.Index(got, agedTier)
+	if liveIndex < 0 {
+		t.Fatalf("EffectiveWorkQuery() missing live-workflow tier: %q", got)
+	}
+	if agedIndex < 0 {
+		t.Fatalf("EffectiveWorkQuery() missing aged fallback tier: %q", got)
+	}
+	if liveIndex >= agedIndex {
+		t.Fatalf("EffectiveWorkQuery() checks aged tier before live-workflow tier: %q", got)
+	}
+}
+
 func TestEffectiveWorkQueryBD105CompatibilityOptIn(t *testing.T) {
 	a := Agent{Name: "mayor"}
 	got := a.EffectiveWorkQueryFor(QueryTopology{Beads: BeadsConfig{BDCompatibility: BeadsBDCompatibility105}})

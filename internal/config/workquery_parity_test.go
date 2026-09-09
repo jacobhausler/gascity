@@ -394,6 +394,9 @@ func renormalizeFederatedCommand(federated string) string {
 			assignedInProgressCandidatesTierCommand(shellVar, QueryTopology{}))
 	}
 	federated = strings.ReplaceAll(federated, gcReadyCommand, bdReadyCommand)
+	// The live-workflow tier has no sort flag, so its federated failure clause
+	// needs its own normalization alongside the existing aged-tier clause.
+	federated = strings.ReplaceAll(federated, `--json --limit=20) || exit $?;`, `--json --limit=20 2>/dev/null);`)
 	federated = strings.ReplaceAll(federated, `--json --limit=1) || exit $?`, `--json --limit=1 2>/dev/null)`)
 	// Suffix-matched so one pair covers both the routed tier (no explicit
 	// --sort; the reader's canonical priority order decides) and the
