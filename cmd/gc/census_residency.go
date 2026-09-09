@@ -122,6 +122,23 @@ func routedWorkStoreCandidates(
 	return censusLegCandidates(storeref.RoutedWork{}, storeref.PlaneRuntime, cityPath, cfg, leading, rigStores, suspendedRigPaths, style)
 }
 
+// routedWorkScaleCheckStoreCandidates resolves the full ROUTED-WORK leg set
+// for the default pool-demand probe. Unlike route repair, which deliberately
+// narrows to the runtime binding for latency, demand must read every leg the
+// federated gc ready reader can serve. Keeping this separate prevents the
+// runtime-plane ruling from making the controller blind to work in the city
+// ledger.
+func routedWorkScaleCheckStoreCandidates(
+	cityPath string,
+	cfg *config.City,
+	leading beads.Store,
+	rigStores map[string]beads.Store,
+	suspendedRigPaths map[string]bool,
+	style censusRefStyle,
+) ([]classStoreCandidate, error) {
+	return censusLegCandidates(storeref.RoutedWork{}, storeref.PlaneReconcile, cityPath, cfg, leading, rigStores, suspendedRigPaths, style)
+}
+
 // sessionCensusStoreCandidates resolves the SESSION census leg set. It differs
 // from the work census in one way that matters: the sessions binding LEADS.
 //

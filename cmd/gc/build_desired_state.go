@@ -507,6 +507,19 @@ func buildDesiredStateWithSessionBeadsAt(
 	// build from the residency plan rather than guessed from config. Non-nil
 	// only on a city converged onto a class binding; see its doc comment.
 	controlBinding := convergedRoutedWorkBinding(cityPath, cfg, store, rigStores, suspendedRigPaths)
+	// Default city-scoped pools use the same full routed-work legs as `gc ready`.
+	// The runtime-plane candidate set above is intentionally narrower for route
+	// repair, so it must not be reused for demand or the work ledger disappears
+	// from the controller's count on a split city.
+	var routedWorkScaleCandidates []classStoreCandidate
+	if store != nil {
+		var err error
+		routedWorkScaleCandidates, err = routedWorkScaleCheckStoreCandidates(cityPath, cfg, store, rigStores, suspendedRigPaths, censusRefScoped)
+		if err != nil {
+			fmt.Fprintf(stderr, "buildDesiredState: resolving default pool-demand stores: %v (using legacy own-store targets)\n", err) //nolint:errcheck
+			routedWorkScaleCandidates = nil
+		}
+	}
 
 	for i := range cfg.Agents {
 		if cfg.Agents[i].Suspended {
@@ -591,6 +604,7 @@ func buildDesiredStateWithSessionBeadsAt(
 			poolDir := agentCommandDir(cityPath, &cfg.Agents[i], cfg.Rigs)
 			if store != nil && !hasCustomScaleCheck {
 				ownTarget := ownScaleCheckTarget(cityPath, cfg, &cfg.Agents[i], store, rigStores, controlBinding, storeScopedControlDispatcher)
+				defaultTargets := defaultScaleCheckTargetsForAgent(cityPath, cfg, &cfg.Agents[i], ownTarget, storeScopedControlDispatcher, routedWorkScaleCandidates)
 				// mode='always': named session is unconditionally desired by the named
 				// pass; pool demand is redundant and creates {name}-N phantoms when N
 				// routed beads arrive. mode='on_demand': pool demand wakes the sleeping
@@ -598,10 +612,10 @@ func buildDesiredStateWithSessionBeadsAt(
 				// gc.routed_to). Leave defaultNamedScaleTargets unchanged for both modes
 				// (partial-query retention).
 				if namedSessionMode != "always" {
-					defaultScaleTargets = append(defaultScaleTargets, ownTarget)
+					defaultScaleTargets = append(defaultScaleTargets, defaultTargets...)
 					namedOnDemandTemplates[template] = true
 				}
-				defaultNamedScaleTargets = append(defaultNamedScaleTargets, ownTarget)
+				defaultNamedScaleTargets = append(defaultNamedScaleTargets, defaultTargets...)
 				// Cross-store demand for named-backing pools (vp-cl4): mirror the
 				// generic-pool guard (vp-s37 / #3078 below). A rig pool that backs
 				// a named session and has no custom scale_check must also probe
@@ -667,7 +681,8 @@ func buildDesiredStateWithSessionBeadsAt(
 		poolDir := agentCommandDir(cityPath, &cfg.Agents[i], cfg.Rigs)
 		if store != nil && !hasCustomScaleCheck {
 			ownTarget := ownScaleCheckTarget(cityPath, cfg, &cfg.Agents[i], store, rigStores, controlBinding, storeScopedControlDispatcher)
-			defaultScaleTargets = append(defaultScaleTargets, ownTarget)
+			defaultTargets := defaultScaleCheckTargetsForAgent(cityPath, cfg, &cfg.Agents[i], ownTarget, storeScopedControlDispatcher, routedWorkScaleCandidates)
+			defaultScaleTargets = append(defaultScaleTargets, defaultTargets...)
 			// Cross-store demand (FR-S0.1 / vp-s37): a rig pool's routed demand
 			// may live in the city store (vp-kvp cross-store delivery), which
 			// the own-rig probe above cannot see. Add a city-store probe so the
@@ -1847,6 +1862,38 @@ func ownScaleCheckTarget(
 		}
 	}
 	return defaultScaleCheckTargetForAgent(cityPath, cfg, agentCfg, cityStore, rigStores)
+}
+
+// defaultScaleCheckTargetsForAgent selects the stores a default probe must
+// read. City-scoped pools claim through federated `gc ready`, so their demand
+// target set is the full routed-work plan. Rig-scoped pools retain their
+// owning-rig plus city delivery behavior, and control dispatchers retain their
+// binding-only exception.
+func defaultScaleCheckTargetsForAgent(
+	cityPath string,
+	cfg *config.City,
+	agentCfg *config.Agent,
+	ownTarget defaultScaleCheckTarget,
+	storeScopedControlDispatcher bool,
+	routedWorkCandidates []classStoreCandidate,
+) []defaultScaleCheckTarget {
+	if storeScopedControlDispatcher || configuredRigName(cityPath, agentCfg, cfg.Rigs) != "" || len(routedWorkCandidates) == 0 {
+		return []defaultScaleCheckTarget{ownTarget}
+	}
+	template := agentCfg.QualifiedName()
+	targets := make([]defaultScaleCheckTarget, 0, len(routedWorkCandidates))
+	for _, candidate := range routedWorkCandidates {
+		target := defaultScaleCheckTarget{
+			template: template,
+			store:    candidate.store,
+			storeKey: candidate.ref,
+		}
+		if target.store == nil {
+			target.err = fmt.Errorf("default scale_check %s: routed-work store %q unavailable", template, candidate.ref)
+		}
+		targets = append(targets, target)
+	}
+	return targets
 }
 
 // defaultScaleCheckTargetForAgent points a pool at its own scope's ledger: the
