@@ -237,10 +237,26 @@ func inferSling1ArgTarget(cfg *config.City, cityPath, beadOrFormula string, isFo
 		bp = sourceBead.prefix
 	}
 	if bp == "" {
+		if cfg != nil && len(cfg.Workspace.DefaultSlingTargets) > 0 {
+			for _, t := range cfg.Workspace.DefaultSlingTargets {
+				if t == "" {
+					return "", sourceBead, "target_resolve_failed", "gc sling: workspace has an empty entry in default_sling_targets"
+				}
+			}
+			return cfg.Workspace.DefaultSlingTargets[slingTargetIndex(len(cfg.Workspace.DefaultSlingTargets))], sourceBead, "", ""
+		}
 		return "", sourceBead, "target_resolve_failed", fmt.Sprintf("gc sling: cannot derive rig from bead %q (no prefix)", beadOrFormula)
 	}
 	rig, found := findRigByPrefix(cfg, bp)
 	if !found {
+		if cfg != nil && len(cfg.Workspace.DefaultSlingTargets) > 0 {
+			for _, t := range cfg.Workspace.DefaultSlingTargets {
+				if t == "" {
+					return "", sourceBead, "target_resolve_failed", "gc sling: workspace has an empty entry in default_sling_targets"
+				}
+			}
+			return cfg.Workspace.DefaultSlingTargets[slingTargetIndex(len(cfg.Workspace.DefaultSlingTargets))], sourceBead, "", ""
+		}
 		return "", sourceBead, "target_resolve_failed", fmt.Sprintf("gc sling: no rig with prefix %q for bead %s", bp, beadOrFormula)
 	}
 	switch {

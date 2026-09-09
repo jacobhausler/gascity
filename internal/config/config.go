@@ -1309,6 +1309,10 @@ type Workspace struct {
 	Prefix string `toml:"prefix,omitempty"`
 	// Provider is the default provider name used by agents that don't specify one.
 	Provider string `toml:"provider,omitempty"`
+	// DefaultSlingTargets are used when targetless gc sling cannot associate a
+	// bead with a registered rig, such as a city-level bead. One entry is
+	// selected at random per dispatch.
+	DefaultSlingTargets []string `toml:"default_sling_targets,omitempty"`
 	// Timezone is the city-default IANA time zone (e.g. "America/New_York")
 	// in which cron order schedules are evaluated when an order does not set
 	// its own tz. Empty means the controller's process-local zone. Invalid
