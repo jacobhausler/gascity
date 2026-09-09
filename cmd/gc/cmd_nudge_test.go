@@ -4945,21 +4945,26 @@ func (s *countingNudgeStore) CloseStore() error {
 	return nil
 }
 
-// installCountingNudgeStoreSeam swaps openNudgeBeadStore for a fake that hands
-// out a fresh countingNudgeStore over a single shared MemStore on every call
-// (mirroring the deployed binary, where each per-tick open resolves to the same
-// backing native store). It returns pointers to the open and close counters and
-// restores the original seam via t.Cleanup. Tests using it must stay serial.
+// installCountingNudgeStoreSeam swaps the store seam for a fake that hands out a
+// fresh countingNudgeStore over a single shared MemStore on every call, marked
+// closable because these fixtures are single-store cities: the open really does
+// own the store it returns. (Mirroring the deployed binary, where each per-tick
+// open resolves to the same backing native store.) It returns pointers to the
+// open and close counters and restores the original seam via t.Cleanup. Tests
+// using it must stay serial.
 func installCountingNudgeStoreSeam(t *testing.T) (opens, closes *int) {
 	t.Helper()
 	backing := beads.NewMemStore()
 	var openCount, closeCount int
-	prev := openNudgeBeadStore
-	openNudgeBeadStore = func(string) beads.NudgesStore {
+	prev := openNudgeBeadStoreHandle
+	openNudgeBeadStoreHandle = func(string) nudgeBeadStoreHandle {
 		openCount++
-		return beads.NudgesStore{Store: &countingNudgeStore{MemStore: backing, closes: &closeCount}}
+		return nudgeBeadStoreHandle{
+			store:    beads.NudgesStore{Store: &countingNudgeStore{MemStore: backing, closes: &closeCount}},
+			closable: true,
+		}
 	}
-	t.Cleanup(func() { openNudgeBeadStore = prev })
+	t.Cleanup(func() { openNudgeBeadStoreHandle = prev })
 	return &openCount, &closeCount
 }
 
