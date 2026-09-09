@@ -201,7 +201,7 @@ func TestOrderTrackingSweepCloseOpensOnlyStoresItOpened(t *testing.T) {
 	binding := newLatchedCloseStore()
 
 	prevOpenSweepStore := newCityRuntimeOpenSweepStore
-	newCityRuntimeOpenSweepStore = func(scopeRoot, gotCityPath string) (beads.Store, error) {
+	newCityRuntimeOpenSweepStore = func(scopeRoot, _ string) (beads.Store, error) {
 		if filepath.Clean(scopeRoot) != filepath.Clean(rigPath) {
 			return nil, errors.New("unexpected sweep open for " + scopeRoot)
 		}
