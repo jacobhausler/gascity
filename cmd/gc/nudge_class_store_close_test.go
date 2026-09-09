@@ -44,7 +44,7 @@ func TestNudgeMaintenanceStoreDoesNotCloseTheSharedClassStore(t *testing.T) {
 
 	maint := nudgeMaintenanceStore{cityPath: cityPath}
 	opened := maint.ensureOpen()
-	if opened.Store != beads.Store(shared) {
+	if opened.Store != shared {
 		t.Fatalf("the maintenance frame holds %T, want the binding store %T it must not own",
 			opened.Store, shared)
 	}
@@ -58,7 +58,7 @@ func TestNudgeMaintenanceStoreDoesNotCloseTheSharedClassStore(t *testing.T) {
 		t.Errorf("the maintenance frame closed the process-memoized nudges-class store; "+
 			"every later caller in this process now reads a closed handle: %v", err)
 	}
-	if again := openNudgeBeadStore(cityPath); again.Store != beads.Store(shared) {
+	if again := openNudgeBeadStore(cityPath); again.Store != shared {
 		t.Errorf("the memo handed the next caller a different store (%T) than the binding's (%T)",
 			again.Store, shared)
 	}
