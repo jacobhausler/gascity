@@ -82,7 +82,7 @@ func openNudgeBeadStoreHandleErr(cityPath string) (nudgeBeadStoreHandle, error) 
 		return nudgeBeadStoreHandle{}, fmt.Errorf("opening the city store at %q: %w", cityPath, err)
 	}
 	routes := cliStorageRoutes(cityPath)
-	if binding, relocated := routes.storeFor(coordclass.ClassNudges); relocated && binding != nil {
+	if binding, relocated := routes.storeFor(coordclass.ClassNudges); relocated && binding != nil { // residency:allow the ownership bit needs the binding identity; this asks the same memo cliStorageRoutes serves (no second derivation of the class gate)
 		// The class is served from the binding, so the work store opened a
 		// moment above answers nothing for this call. Release it here rather
 		// than leak a handle and its read pool on every nudge open; a failed
