@@ -2039,7 +2039,10 @@ func (t *Tmux) sendKeysLiteralWithRetry(target, text string, timeout time.Durati
 // re-entered, so this cannot double-submit.
 const (
 	submitEnterMaxSends       = 3
-	submitConfirmPollsPerSend = 4
+	// Allow a slow provider TUI about 15s to paint its busy footer while
+	// keeping the three-send confirmation path below the default 30s nudge
+	// lock timeout: 3*32*150ms + 2*200ms = 14.8s.
+	submitConfirmPollsPerSend = 32
 	submitConfirmPollInterval = 150 * time.Millisecond
 	submitReEnterBackoff      = 200 * time.Millisecond
 )
