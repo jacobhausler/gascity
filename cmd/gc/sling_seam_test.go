@@ -92,6 +92,23 @@ func TestInferSling1ArgTarget_FormulaRejected(t *testing.T) {
 	}
 }
 
+func TestInferSling1ArgTarget_UsesWorkspaceDefaultForCityBead(t *testing.T) {
+	cfg, err := config.Parse([]byte("[workspace]\ndefault_sling_targets = [\"mayor\", \"mechanic\"]\n"))
+	if err != nil {
+		t.Fatalf("parse workspace defaults: %v", err)
+	}
+	restore := SetSlingTargetIndexForTest(func(int) int { return 1 })
+	defer restore()
+
+	target, _, errCode, errMsg := inferSling1ArgTarget(cfg, "/tmp/nonexistent", "cr-54hci", false)
+	if errCode != "" {
+		t.Fatalf("infer city-level target: code=%q msg=%q", errCode, errMsg)
+	}
+	if target != "mechanic" {
+		t.Fatalf("workspace default target = %q, want mechanic", target)
+	}
+}
+
 // TestSlingTargetIndexSeam proves the injectable slingTargetIndex seam makes the
 // otherwise-random 1-arg default_sling_targets selection deterministic for tests
 // and future sling characterization, and restores the production (rand) picker.
