@@ -31,6 +31,31 @@ func TestSubmitEnterAndConfirmReEntersWhileIdle(t *testing.T) {
 	}
 }
 
+// TestSubmitEnterAndConfirmWaitsForSlowBusyIndicator proves that a provider
+// whose busy footer paints after several polls is not re-entered prematurely.
+// Codex can accept the submit while its "Working (… esc to interrupt)" footer
+// is still rendering; the confirmation budget must cover that paint latency or
+// the dispatcher can report a delivered nudge as unconfirmed.
+func TestSubmitEnterAndConfirmWaitsForSlowBusyIndicator(t *testing.T) {
+	var enters, busyCalls int
+	busy := func() (bool, error) {
+		busyCalls++
+		return busyCalls > 8, nil
+	}
+	sendEnter := func() error { enters++; return nil }
+
+	confirmed, err := submitEnterAndConfirm(sendEnter, func() {}, busy, noSleep)
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if !confirmed {
+		t.Fatal("confirmed = false, want true after the delayed busy footer appears")
+	}
+	if enters != 1 {
+		t.Fatalf("enters = %d, want 1 (do not re-submit while the footer is still painting)", enters)
+	}
+}
+
 // TestSubmitEnterAndConfirmStopsWhenBusy proves the common case: a single Enter
 // that submits is confirmed on the first poll with no wasted re-send.
 func TestSubmitEnterAndConfirmStopsWhenBusy(t *testing.T) {
