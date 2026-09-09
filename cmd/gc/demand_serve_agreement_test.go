@@ -374,10 +374,17 @@ func TestGoPredicateAndGeneratedQueryAgreeRowByRow(t *testing.T) {
 	cfg := agreementConfig()
 	templates := map[string]struct{}{agreementTemplate: {}}
 	agent := config.Agent{Name: "worker", Dir: "rig"}
-	query := agent.EffectiveWorkQueryFor(config.QueryTopology{})
-	args := tierThreeReaderArgs(t, query, agreementTemplate)
+	// This conformance executes the generated reader through gc ready's real
+	// flag surface. The single-store query uses bd's native
+	// --has-metadata-key spelling, which is covered by
+	// TestEffectiveWorkQuerySingleStoreLiveWorkflowTierIsExecutable; the
+	// federated query is the generated form this probe can parse and execute.
+	query := agent.EffectiveWorkQueryFor(config.QueryTopology{FederatedReady: true})
+	liveArgs := tierThreeReaderArgs(t, query, agreementTemplate)
+	agedArgs := tierThreeAgedReaderArgs(t, query, agreementTemplate)
 
-	opts, metaWant := parseReadyArgsForTest(t, args)
+	opts, metaWant := parseReadyArgsForTest(t, liveArgs)
+	agedOpts, agedMetaWant := parseReadyArgsForTest(t, agedArgs)
 	legacyOpts, legacyMetaWant := parseReadyArgsForTest(t, tierThreeLegacyReaderArgs(t, query, agreementTemplate))
 	assertLegacyTierFilterUnchanged(t, query)
 
@@ -386,7 +393,13 @@ func TestGoPredicateAndGeneratedQueryAgreeRowByRow(t *testing.T) {
 			bead := postCanonicalizeBead(cfg, row.bead)
 
 			_, counted := demandServableForTemplates(cfg, bead, templates)
-			served := workerIsServed(bead, opts, metaWant) || legacyWorkflowTierServes(bead, legacyOpts, legacyMetaWant)
+			// routedReadyTierCommand falls back from the live workflow tier to
+			// the aged routed tier when the former is empty. Evaluate both
+			// generated reader forms over this one-row corpus; the live-first
+			// ordering itself is pinned by the work-query acceptance tests.
+			served := workerIsServed(bead, opts, metaWant) ||
+				workerIsServed(bead, agedOpts, agedMetaWant) ||
+				legacyWorkflowTierServes(bead, legacyOpts, legacyMetaWant)
 
 			if counted != served {
 				t.Fatalf("AGREEMENT VIOLATED for %s: the Go demand predicate says %v, the generated pool-demand query form says %v",
@@ -463,7 +476,7 @@ func unescapeShellSingleQuotes(s string) string {
 // stamped with gc.run_target before canonical route stamping shipped.
 func tierThreeLegacyReaderArgs(t *testing.T, query, target string) []string {
 	t.Helper()
-	return readerArgsForMarker(t, query, `--metadata-field "`+beadmeta.RunTargetMetadataKey+`=$target"`, target)
+	return readerArgsForMarkerAt(t, query, `--metadata-field "`+beadmeta.RunTargetMetadataKey+`=$target"`, target, 0)
 }
 
 // postCanonicalizeBead applies the same-tick route collapse, so the corpus is
@@ -488,17 +501,38 @@ func postCanonicalizeBead(cfg *config.City, bead beads.Bead) beads.Bead {
 // conformance below would silently degrade into testing nothing.
 func tierThreeReaderArgs(t *testing.T, query, target string) []string {
 	t.Helper()
-	return readerArgsForMarker(t, query, `--metadata-field "`+beadmeta.RoutedToMetadataKey+`=$target"`, target)
+	return readerArgsForMarkerAt(t, query, `--metadata-field "`+beadmeta.RoutedToMetadataKey+`=$target"`, target, 0)
 }
 
-// readerArgsForMarker returns the argv of the reader invocation carrying marker.
-// It fails loudly rather than falling back: a conformance that cannot find its
-// subject would silently degrade into testing nothing.
-func readerArgsForMarker(t *testing.T, query, marker, target string) []string {
+// tierThreeAgedReaderArgs slices the fallback routed pool-demand reader out of
+// the generated work query. The live workflow tier is first; the ordinary aged
+// tier is its second routed ready invocation.
+func tierThreeAgedReaderArgs(t *testing.T, query, target string) []string {
 	t.Helper()
-	idx := strings.Index(query, marker)
+	return readerArgsForMarkerAt(t, query, `--metadata-field "`+beadmeta.RoutedToMetadataKey+`=$target"`, target, 1)
+}
+
+// readerArgsForMarkerAt returns the argv of the occurrence-th reader
+// invocation carrying marker. It fails loudly rather than falling back: a
+// conformance that cannot find its subject would silently degrade into testing
+// nothing.
+func readerArgsForMarkerAt(t *testing.T, query, marker, target string, occurrence int) []string {
+	t.Helper()
+	if occurrence < 0 {
+		t.Fatalf("reader marker occurrence must be non-negative: %d", occurrence)
+	}
+	searchFrom := 0
+	idx := -1
+	for i := 0; i <= occurrence; i++ {
+		at := strings.Index(query[searchFrom:], marker)
+		if at < 0 {
+			break
+		}
+		idx = searchFrom + at
+		searchFrom = idx + len(marker)
+	}
 	if idx < 0 {
-		t.Fatalf("tier carrying %s not found in the generated query:\n%s", marker, query)
+		t.Fatalf("reader occurrence %d carrying %s not found in the generated query:\n%s", occurrence, marker, query)
 	}
 	head := strings.LastIndex(query[:idx], "ready ")
 	if head < 0 {
