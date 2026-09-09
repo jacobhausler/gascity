@@ -3399,6 +3399,13 @@
           "type": "string",
           "description": "Provider is the default provider name used by agents that don't specify one."
         },
+        "default_sling_targets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "DefaultSlingTargets are used when targetless gc sling cannot associate a\nbead with a registered rig, such as a city-level bead. One entry is\nselected at random per dispatch."
+        },
         "timezone": {
           "type": "string",
           "description": "Timezone is the city-default IANA time zone (e.g. \"America/New_York\")\nin which cron order schedules are evaluated when an order does not set\nits own tz. Empty means the controller's process-local zone. Invalid\nnames fail order discovery loudly rather than falling back silently."
