@@ -227,8 +227,17 @@ func bdReadyPoolDemandShell(limitFlag string, topo QueryTopology) string {
 	return readyReaderCommand(topo.FederatedReady) + bdReadyIncludeEphemeralArg(topo.includeEphemeralReady()) + ` --metadata-field "` + beadmeta.RoutedToMetadataKey + `=$target"` + PoolDemandServeRulesForQuery().ShellArgs() + ` --json ` + limitFlag
 }
 
+func readyRootPresenceFilter(topo QueryTopology) string {
+	if topo.FederatedReady {
+		// gc ready accepts a bare --metadata-field as its native presence
+		// filter. bd ready requires its dedicated presence flag instead.
+		return ` --metadata-field "` + beadmeta.RootBeadIDMetadataKey + `"`
+	}
+	return ` --has-metadata-key "` + beadmeta.RootBeadIDMetadataKey + `"`
+}
+
 func bdReadyPoolDemandLiveWorkflowShell(limitFlag string, topo QueryTopology) string {
-	return readyReaderCommand(topo.FederatedReady) + bdReadyIncludeEphemeralArg(topo.includeEphemeralReady()) + ` --metadata-field "` + beadmeta.RoutedToMetadataKey + `=$target" --metadata-field "` + beadmeta.RootBeadIDMetadataKey + `"` + PoolDemandServeRulesForQuery().ShellArgs() + ` --json ` + limitFlag
+	return readyReaderCommand(topo.FederatedReady) + bdReadyIncludeEphemeralArg(topo.includeEphemeralReady()) + ` --metadata-field "` + beadmeta.RoutedToMetadataKey + `=$target"` + readyRootPresenceFilter(topo) + PoolDemandServeRulesForQuery().ShellArgs() + ` --json ` + limitFlag
 }
 
 // bdReadyPoolDemandMigrationShell is a temporary raw compatibility probe for

@@ -393,6 +393,9 @@ func renormalizeFederatedCommand(federated string) string {
 			assignedInProgressCandidatesTierCommand(shellVar, QueryTopology{FederatedReady: true}),
 			assignedInProgressCandidatesTierCommand(shellVar, QueryTopology{}))
 	}
+	federated = replaceFragment(federated,
+		` --metadata-field "`+beadmeta.RootBeadIDMetadataKey+`"`,
+		` --has-metadata-key "`+beadmeta.RootBeadIDMetadataKey+`"`)
 	federated = strings.ReplaceAll(federated, gcReadyCommand, bdReadyCommand)
 	// The live-workflow tier has no sort flag, so its federated failure clause
 	// needs its own normalization alongside the existing aged-tier clause.

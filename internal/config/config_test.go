@@ -1905,7 +1905,7 @@ func TestEffectiveWorkQueryServesLiveWorkflowStepsBeforeAgedTier(t *testing.T) {
 	a := Agent{Name: "mayor"}
 	got := a.EffectiveWorkQuery()
 
-	liveWorkflowTier := `bd ready --metadata-field "gc.routed_to=$target" --metadata-field "gc.root_bead_id" --unassigned --exclude-type=epic --exclude-label "hold:mayor" --exclude-label "hold:external" --json --limit=20`
+	liveWorkflowTier := `bd ready --metadata-field "gc.routed_to=$target" --has-metadata-key "gc.root_bead_id" --unassigned --exclude-type=epic --exclude-label "hold:mayor" --exclude-label "hold:external" --json --limit=20`
 	agedTier := `bd ready --metadata-field "gc.routed_to=$target" --unassigned --exclude-type=epic --exclude-label "hold:mayor" --exclude-label "hold:external" --json --limit=20`
 	liveIndex := strings.Index(got, liveWorkflowTier)
 	agedIndex := strings.Index(got, agedTier)
@@ -1917,6 +1917,38 @@ func TestEffectiveWorkQueryServesLiveWorkflowStepsBeforeAgedTier(t *testing.T) {
 	}
 	if liveIndex >= agedIndex {
 		t.Fatalf("EffectiveWorkQuery() checks aged tier before live-workflow tier: %q", got)
+	}
+}
+
+func TestEffectiveWorkQuerySingleStoreLiveWorkflowTierIsExecutable(t *testing.T) {
+	a := Agent{Name: "worker", Dir: "hello-world"}
+	logPath := filepath.Join(t.TempDir(), "bd.log")
+	out := runEffectiveWorkQuery(t, a, map[string]string{"BD_LOG": logPath}, `#!/bin/sh
+set -eu
+printf '%s\n' "$*" >> "$BD_LOG"
+case "$1" in
+  ready)
+    case "$*" in
+      *"--metadata-field gc.routed_to=hello-world/worker"*"--has-metadata-key gc.root_bead_id"*)
+        printf '[{"id":"live-step","issue_type":"task","status":"open","metadata":{"gc.routed_to":"hello-world/worker","gc.root_bead_id":"root"}}]'
+        ;;
+      *"--metadata-field gc.root_bead_id"*)
+        printf '%s\n' 'invalid --metadata-field: expected key=value, got "gc.root_bead_id"' >&2
+        exit 2
+        ;;
+      *)
+        printf '[]'
+        ;;
+    esac
+    ;;
+  *)
+    printf '[]'
+    ;;
+esac
+`)
+	if !strings.Contains(out, "live-step") {
+		log, _ := os.ReadFile(logPath)
+		t.Fatalf("EffectiveWorkQuery() = %q, want live workflow step from native single-store filter; bd calls: %s", out, log)
 	}
 }
 
