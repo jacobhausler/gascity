@@ -2038,7 +2038,7 @@ func (t *Tmux) sendKeysLiteralWithRetry(target, text string, timeout time.Durati
 // while the pane is still idle — an already-submitted turn (busy) is never
 // re-entered, so this cannot double-submit.
 const (
-	submitEnterMaxSends       = 3
+	submitEnterMaxSends = 3
 	// Allow a slow provider TUI about 15s to paint its busy footer while
 	// keeping the three-send confirmation path below the default 30s nudge
 	// lock timeout: 3*32*150ms + 2*200ms = 14.8s.
