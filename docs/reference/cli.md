@@ -4433,7 +4433,8 @@ arbitrary text (which auto-creates a task bead).
 
 When target is omitted, the bead's rig prefix is used to look up the rig's
 default_sling_targets (or default_sling_target) from config and one is chosen
-at random. Requires --formula to have an explicit target.
+at random. If no rig matches, workspace.default_sling_targets is used when
+configured. Requires --formula to have an explicit target.
 Inline text also requires an explicit target.
 
 With --formula, the formula is instantiated and its root bead is routed to
