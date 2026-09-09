@@ -383,6 +383,14 @@ func ensureSessionNameAvailableForSelfAndOwner(store beads.Store, name, selfID, 
 				strings.TrimSpace(b.Metadata["session_origin"]) == "ephemeral" {
 				continue
 			}
+			// Before pool_managed/session_origin were stamped, transient pool
+			// slots were persisted with only the identity-derived runtime shape.
+			// Retiring one left a closed orphan whose session_name still matched
+			// its agent label, so the slot could never be rematerialized. Release
+			// only that terminal legacy shape; explicit names remain permanent.
+			if legacyOrphanedPoolSlotReleasesName(b, name) {
+				continue
+			}
 			return fmt.Errorf("%w: %q already belongs to %s", ErrSessionNameExists, name, b.ID)
 		}
 		if b.Status == "closed" {
@@ -413,6 +421,38 @@ func ensureSessionNameAvailableForSelfAndOwner(store beads.Store, name, selfID, 
 		}
 	}
 	return nil
+}
+
+func legacyOrphanedPoolSlotReleasesName(b beads.Bead, name string) bool {
+	if b.Status != "closed" || strings.TrimSpace(b.Metadata["state"]) != "orphaned" {
+		return false
+	}
+	if !strings.HasSuffix(name, "-pool") ||
+		strings.TrimSpace(b.Metadata["session_name"]) != name ||
+		strings.TrimSpace(b.Metadata["agent_name"]) != name {
+		return false
+	}
+	// Any newer lifecycle marker makes the bead eligible for its own
+	// classifier. Do not infer pool ownership from a name once the bead has
+	// explicit provenance or configured-name metadata.
+	for _, key := range []string{
+		"pool_managed",
+		"session_origin",
+		"pool_slot",
+		"session_name_explicit",
+		"configured_named_session",
+		"configured_named_identity",
+	} {
+		if strings.TrimSpace(b.Metadata[key]) != "" {
+			return false
+		}
+	}
+	for _, label := range b.Labels {
+		if label == "agent:"+name {
+			return true
+		}
+	}
+	return false
 }
 
 func failedCreateIdentityReleased(b beads.Bead) bool {

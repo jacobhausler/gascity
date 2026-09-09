@@ -1389,3 +1389,53 @@ func TestEnsureSessionNameAvailable_RejectsNonReleasablePoolSlotShapes(t *testin
 		})
 	}
 }
+
+// Legacy pool slots created before pool_managed/session_origin were stamped
+// still have the stable transient runtime shape. A closed orphan with that
+// shape must not keep the slot name reserved forever.
+func TestEnsureSessionNameAvailable_ReleasesLegacyOrphanedPoolSlot(t *testing.T) {
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{
+		Type:   BeadType,
+		Labels: []string{LabelSession, "agent:manager-1-pool"},
+		Metadata: map[string]string{
+			"session_name": "manager-1-pool",
+			"agent_name":   "manager-1-pool",
+			"state":        "orphaned",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(legacy orphaned pool slot): %v", err)
+	}
+	if err := store.Close(bead.ID); err != nil {
+		t.Fatalf("Close(legacy orphaned pool slot): %v", err)
+	}
+
+	if err := ensureSessionNameAvailable(store, "manager-1-pool"); err != nil {
+		t.Fatalf("ensureSessionNameAvailable(legacy orphaned pool slot) = %v, want nil", err)
+	}
+}
+
+func TestEnsureSessionNameAvailable_KeepsExplicitOrphanedPoolName(t *testing.T) {
+	store := beads.NewMemStore()
+	bead, err := store.Create(beads.Bead{
+		Type:   BeadType,
+		Labels: []string{LabelSession, "agent:manual-pool"},
+		Metadata: map[string]string{
+			"session_name":          "manual-pool",
+			"agent_name":            "manual-pool",
+			"session_name_explicit": "true",
+			"state":                 "orphaned",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create(explicit orphaned pool name): %v", err)
+	}
+	if err := store.Close(bead.ID); err != nil {
+		t.Fatalf("Close(explicit orphaned pool name): %v", err)
+	}
+
+	if err := ensureSessionNameAvailable(store, "manual-pool"); !errors.Is(err, ErrSessionNameExists) {
+		t.Fatalf("ensureSessionNameAvailable(explicit orphaned pool name) = %v, want %v", err, ErrSessionNameExists)
+	}
+}
