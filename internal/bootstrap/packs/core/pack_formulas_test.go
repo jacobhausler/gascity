@@ -208,6 +208,36 @@ func TestCoreShippedAssetsAvoidNonexistentBDListSearchFlag(t *testing.T) {
 	}
 }
 
+// TestMolDoWorkDrainAcceptsHookSessionIdentity keeps the drain ownership check
+// aligned with the hook claim contract. Hook claims store the session id as the
+// bead assignee while the runtime actor names the pool seat; accepting only one
+// spelling strands every legitimate hook-claimed drain. A foreign assignee
+// must still fail the same guard.
+func TestMolDoWorkDrainAcceptsHookSessionIdentity(t *testing.T) {
+	step := formulaStep(t, readFormula(t, "mol-do-work.toml"), "drain")
+
+	for _, required := range []string{
+		`RUNTIME_ACTOR="${BEADS_ACTOR:-}"`,
+		"matches_runtime_identity() {",
+		`if ! matches_runtime_identity "$STARTUP_ASSIGNEE" "$RUNTIME_ACTOR" "${GC_SESSION_ID:-}"; then`,
+		`if [ -n "$CANDIDATE_ASSIGNEE" ] && ! matches_runtime_identity "$CANDIDATE_ASSIGNEE" "$RUNTIME_ACTOR" "${GC_SESSION_ID:-}"; then`,
+		`gc bd update "$DRAIN_BEAD_ID" --claim`,
+	} {
+		if !strings.Contains(step, required) {
+			t.Errorf("mol-do-work drain is missing native identity guard fragment %q", required)
+		}
+	}
+
+	for _, forbidden := range []string{
+		`[ "$STARTUP_ASSIGNEE" != "$RUNTIME_ACTOR" ]`,
+		`[ "$CANDIDATE_ASSIGNEE" != "$RUNTIME_ACTOR" ]`,
+	} {
+		if strings.Contains(step, forbidden) {
+			t.Errorf("mol-do-work drain must not require only the actor spelling: %s", forbidden)
+		}
+	}
+}
+
 // TestMolPolecatCommitResolvesRepoBeforeRemovingWorktree pins the fix for a
 // stranded-worktree bug: `git worktree remove` resolves the repo from cwd,
 // and this step `cd`s away from the worktree before removing it, so the bare
