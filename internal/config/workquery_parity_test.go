@@ -393,6 +393,15 @@ func renormalizeFederatedCommand(federated string) string {
 			assignedInProgressCandidatesTierCommand(shellVar, QueryTopology{FederatedReady: true}),
 			assignedInProgressCandidatesTierCommand(shellVar, QueryTopology{}))
 	}
+	// The canonical routed tier now reads without a limit, filters workflow
+	// roots, and applies the worker window afterward. Single-store queries also
+	// redirect that aged probe's stderr; replace the complete generated fragment
+	// so parity continues to isolate the reader swap from this shared change.
+	federated = replaceFragment(federated,
+		bdReadyPoolDemandShell("--limit=20", QueryTopology{FederatedReady: true})+
+			readyReaderStderrSink(true),
+		bdReadyPoolDemandShell("--limit=20", QueryTopology{})+
+			readyReaderStderrSink(false))
 	federated = replaceFragment(federated,
 		` --metadata-field "`+beadmeta.RootBeadIDMetadataKey+`"`,
 		` --has-metadata-key "`+beadmeta.RootBeadIDMetadataKey+`"`)
@@ -406,6 +415,14 @@ func renormalizeFederatedCommand(federated string) string {
 	// migration fallback (which keeps --sort oldest for its retirement window).
 	federated = strings.ReplaceAll(federated, `--limit=20) || exit $?`, `--limit=20 2>/dev/null)`)
 	federated = strings.ReplaceAll(federated, `--limit=20 2>/dev/null) || exit $?`, `--limit=20 2>/dev/null)`)
+	// The aged canonical tier is a shell block because its jq filter runs
+	// after the unlimited reader. Its single-store stderr sink sits after the
+	// block, while the federated failure clause sits after the command
+	// substitution. Normalize that block boundary as one sanctioned reader
+	// difference.
+	federated = strings.ReplaceAll(federated,
+		`; }) || exit $?; gc_preferred_pool_demand=`,
+		`; } 2>/dev/null); gc_preferred_pool_demand=`)
 	return federated
 }
 

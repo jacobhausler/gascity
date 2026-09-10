@@ -76,6 +76,14 @@ func agreementRows() []agreementRow {
 			wantServable: true,
 		},
 		{
+			name: "workflow root on canonical routed queue",
+			bead: beads.Bead{ID: "a-13", Status: "open", Type: "task", Metadata: map[string]string{
+				beadmeta.KindMetadataKey:     beadmeta.KindWorkflow,
+				beadmeta.RoutedToMetadataKey: agreementTemplate,
+			}},
+			wantServable: false,
+		},
+		{
 			name: "routed epic",
 			bead: beads.Bead{
 				ID: "a-7", Status: "open", Type: "epic",
@@ -398,7 +406,7 @@ func TestGoPredicateAndGeneratedQueryAgreeRowByRow(t *testing.T) {
 			// generated reader forms over this one-row corpus; the live-first
 			// ordering itself is pinned by the work-query acceptance tests.
 			served := workerIsServed(bead, opts, metaWant) ||
-				workerIsServed(bead, agedOpts, agedMetaWant) ||
+				workerIsServedByCanonicalPoolDemand(bead, agedOpts, agedMetaWant) ||
 				legacyWorkflowTierServes(bead, legacyOpts, legacyMetaWant)
 
 			if counted != served {
@@ -442,6 +450,30 @@ func workerIsServed(bead beads.Bead, opts readyOpts, metaWant []metadataFieldFil
 		return false
 	}
 	return workQueryHasReadyWork(filterUnreadyHookCandidates(string(encoded), time.Now()))
+}
+
+// workerIsServedByCanonicalPoolDemand adds the post-read jq exclusion to the
+// aged routed tier. The reader flags cannot express a negative metadata
+// selector, so bd/gc ready returns the bounded page and the generated query
+// filters gc.kind=workflow before applying its limit. The live workflow tier
+// is checked separately above; its root-presence selector excludes the root
+// shape this post-filter protects against.
+func workerIsServedByCanonicalPoolDemand(bead beads.Bead, opts readyOpts, metaWant []metadataFieldFilter) bool {
+	if !workerIsServed(bead, opts, metaWant) {
+		return false
+	}
+	rules := config.PoolDemandServeRulesForQuery()
+	canonicalRoute := strings.TrimSpace(bead.Metadata[beadmeta.RoutedToMetadataKey]) != ""
+	if !canonicalRoute {
+		return true
+	}
+	kind := strings.TrimSpace(bead.Metadata[beadmeta.KindMetadataKey])
+	for _, excluded := range rules.ExcludeKinds {
+		if kind == excluded {
+			return false
+		}
+	}
+	return true
 }
 
 // assertLegacyTierFilterUnchanged pins the jq program legacyWorkflowTierServes

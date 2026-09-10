@@ -1416,7 +1416,7 @@ func TestDefaultScaleCheckCountsIgnoresRunTargetOnNonWorkflowDivergentWork(t *te
 	}
 }
 
-func TestDefaultScaleCheckCountsIgnoresRunTargetWhenWorkflowRoutedToPresent(t *testing.T) {
+func TestDefaultScaleCheckCountsExcludesCanonicalWorkflowRoot(t *testing.T) {
 	const (
 		entryTarget = "gascity/controller"
 		staleTarget = "gascity/reviewer"
@@ -1446,8 +1446,8 @@ func TestDefaultScaleCheckCountsIgnoresRunTargetWhenWorkflowRoutedToPresent(t *t
 	if len(errs) != 0 {
 		t.Fatalf("defaultScaleCheckCounts errs = %v", errs)
 	}
-	if got := counts[entryTarget]; got != 1 {
-		t.Fatalf("defaultScaleCheckCounts[%q] = %d, want 1", entryTarget, got)
+	if got := counts[entryTarget]; got != 0 {
+		t.Fatalf("defaultScaleCheckCounts[%q] = %d, want 0 for canonical workflow root", entryTarget, got)
 	}
 	if got := counts[staleTarget]; got != 0 {
 		t.Fatalf("defaultScaleCheckCounts[%q] = %d, want 0", staleTarget, got)

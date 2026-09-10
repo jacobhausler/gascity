@@ -102,6 +102,17 @@ func demandRowServable(b beads.Bead) bool {
 			}
 		}
 	}
+	// The canonical routed query excludes graph roots, but the temporary
+	// gc.run_target migration tier deliberately still serves a workflow root
+	// whose gc.routed_to is empty. Keep the same distinction here or the
+	// controller would disagree with its migration fallback.
+	kind := strings.TrimSpace(b.Metadata[beadmeta.KindMetadataKey])
+	canonicalRoute := strings.TrimSpace(b.Metadata[beadmeta.RoutedToMetadataKey]) != ""
+	for _, excluded := range rules.ExcludeKinds {
+		if canonicalRoute && kind == excluded {
+			return false
+		}
+	}
 	return true
 }
 

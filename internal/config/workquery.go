@@ -180,9 +180,10 @@ func jqMeta(key string) string {
 // forbidden to claim: a routed epic, or a bead parked on a dispatch hold, was
 // permanent demand and every worker it spawned saw an empty query.
 //
-// The shell builder below renders its flags FROM this value, so the descriptor
-// is not a description of the query — it is the query's source. A flag added
-// there without a field here cannot exist.
+// The shell builder below renders its flags and post-read metadata filters FROM
+// this value, so the descriptor is not a description of the query — it is the
+// query's source. A serving exclusion added there without a field here cannot
+// exist.
 type PoolDemandServeRules struct {
 	// RequireUnassigned mirrors --unassigned: a row carrying any assignee is
 	// not routed pool demand.
@@ -192,6 +193,11 @@ type PoolDemandServeRules struct {
 	// ExcludeLabels mirrors the repeated --exclude-label flags: the dispatch
 	// holds a worker is deliberately forbidden to claim through.
 	ExcludeLabels []string
+	// ExcludeKinds names gc.kind metadata values that are graph roots or other
+	// control records, not worker-served pool demand. bd ready has no negative
+	// metadata selector, so the canonical routed query applies these values in
+	// its post-read jq filter.
+	ExcludeKinds []string
 }
 
 // PoolDemandServeRulesForQuery returns the serving rules of the generated
@@ -202,7 +208,27 @@ func PoolDemandServeRulesForQuery() PoolDemandServeRules {
 		RequireUnassigned: true,
 		ExcludeTypes:      []string{"epic"},
 		ExcludeLabels:     append([]string(nil), beadmeta.DispatchHoldLabels...),
+		ExcludeKinds:      []string{beadmeta.KindWorkflow},
 	}
+}
+
+// ExcludeKindsJQ renders the post-read filter for metadata exclusions that the
+// bd ready flag surface cannot express. The limit is applied after filtering;
+// otherwise a routed workflow root in the reader's first page can hide real
+// worker work behind it forever.
+func (r PoolDemandServeRules) ExcludeKindsJQ(limit int) string {
+	if len(r.ExcludeKinds) == 0 {
+		return ""
+	}
+	clauses := make([]string, 0, len(r.ExcludeKinds))
+	for _, kind := range r.ExcludeKinds {
+		clauses = append(clauses, jqMeta(beadmeta.KindMetadataKey)+" != "+strconv.Quote(kind))
+	}
+	filter := `[.[] | select(` + strings.Join(clauses, " and ") + `)]`
+	if limit > 0 {
+		filter += ` | .[:` + strconv.Itoa(limit) + `]`
+	}
+	return shellquote.Join([]string{"jq", filter})
 }
 
 // ShellArgs renders the rules as the bd flag string a routed pool-demand tier
@@ -224,7 +250,39 @@ func (r PoolDemandServeRules) ShellArgs() string {
 }
 
 func bdReadyPoolDemandShell(limitFlag string, topo QueryTopology) string {
-	return readyReaderCommand(topo.FederatedReady) + bdReadyIncludeEphemeralArg(topo.includeEphemeralReady()) + ` --metadata-field "` + beadmeta.RoutedToMetadataKey + `=$target"` + PoolDemandServeRulesForQuery().ShellArgs() + ` --json ` + limitFlag
+	rules := PoolDemandServeRulesForQuery()
+	reader := bdReadyPoolDemandReaderShell(limitFlag, topo)
+	if limit, ok := readyLimitValue(limitFlag); ok {
+		reader = bdReadyPoolDemandReaderShell("--limit 0", topo)
+		return `{ ready_json=$(` + reader + `); ready_status=$?; [ "$ready_status" -eq 0 ] || exit "$ready_status"; printf "%s" "$ready_json" | ` + rules.ExcludeKindsJQ(limit) + `; }`
+	}
+	return reader
+}
+
+func bdReadyPoolDemandReaderShell(limitFlag string, topo QueryTopology) string {
+	rules := PoolDemandServeRulesForQuery()
+	return readyReaderCommand(topo.FederatedReady) + bdReadyIncludeEphemeralArg(topo.includeEphemeralReady()) + ` --metadata-field "` + beadmeta.RoutedToMetadataKey + `=$target"` + rules.ShellArgs() + ` --json ` + limitFlag
+}
+
+func readyLimitValue(limitFlag string) (int, bool) {
+	fields := strings.Fields(limitFlag)
+	for i, field := range fields {
+		value := ""
+		switch {
+		case strings.HasPrefix(field, "--limit="):
+			value = strings.TrimPrefix(field, "--limit=")
+		case field == "--limit" && i+1 < len(fields):
+			value = fields[i+1]
+		}
+		if value == "" {
+			continue
+		}
+		parsed, err := strconv.Atoi(value)
+		if err == nil && parsed >= 0 {
+			return parsed, true
+		}
+	}
+	return 0, false
 }
 
 func readyRootPresenceFilter(topo QueryTopology) string {
