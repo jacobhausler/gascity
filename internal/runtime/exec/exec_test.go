@@ -231,6 +231,36 @@ func TestRelaunch_WarmBoxRespawnsPane(t *testing.T) {
 	}
 }
 
+func TestLaunchAgent_NonZeroExecIncludesPackStderr(t *testing.T) {
+	dir := t.TempDir()
+	script := writeScript(t, dir, `
+op="$1"
+case "$op" in
+  protocol) echo '{"version":0,"capabilities":["proc.provision","proc.exec"]}' ;;
+  exec)
+    command=$(cat)
+    case "$command" in
+      *has-session*) exit 1 ;;
+      *) echo "tmux launch failed" >&2; exit 7 ;;
+    esac
+    ;;
+  *) exit 2 ;;
+esac
+`)
+	p := NewProvider(script)
+
+	err := p.launchAgent(context.Background(), "s", runtime.Config{Command: "agent"})
+	if err == nil {
+		t.Fatal("launchAgent succeeded, want the exec command's non-zero exit")
+	}
+	if !strings.Contains(err.Error(), "tmux exited 7") {
+		t.Fatalf("launchAgent error = %q, want the exit code", err)
+	}
+	if !strings.Contains(err.Error(), "tmux launch failed") {
+		t.Fatalf("launchAgent error = %q, want the pack's stderr", err)
+	}
+}
+
 func TestStart(t *testing.T) {
 	dir := t.TempDir()
 	script := writeScript(t, dir, allOpsScript())

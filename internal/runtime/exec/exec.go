@@ -296,10 +296,10 @@ func (p *Provider) launchAgent(ctx context.Context, name string, cfg runtime.Con
 	} else {
 		argv = []string{"tmux", "new-session", "-d", "-s", execTmuxSession, command}
 	}
-	if _, code, err := p.Exec(ctx, name, argv); err != nil {
+	if output, code, err := p.Exec(ctx, name, argv); err != nil {
 		return fmt.Errorf("exec provider: launching agent in %q: %w", name, err)
 	} else if code != 0 {
-		return fmt.Errorf("exec provider: launching agent in %q: tmux exited %d", name, code)
+		return fmt.Errorf("exec provider: launching agent in %q: tmux exited %d: %s", name, code, strings.TrimSpace(string(output)))
 	}
 	return p.dismissStartupDialogs(ctx, name, cfg)
 }
@@ -878,13 +878,13 @@ func (p *Provider) Exec(ctx context.Context, name string, argv []string) ([]byte
 				// code; only an UNDECLARED runtime means "op unimplemented" — fall
 				// back to the dedicated driving ops.
 				if p.handshakeCapability(runtime.ProtocolCapabilityConnectionExec) {
-					return stdout.Bytes(), 2, nil
+					return append(stdout.Bytes(), stderr.Bytes()...), 2, nil
 				}
 				return nil, 0, fmt.Errorf("%w: %s exec %s", runtime.ErrExecUnsupported, p.script, name)
 			}
 			// A non-zero (non-2) exit is the command's own result, not a
 			// transport failure: return the output and the code, no error.
-			return stdout.Bytes(), exitErr.ExitCode(), nil
+			return append(stdout.Bytes(), stderr.Bytes()...), exitErr.ExitCode(), nil
 		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
