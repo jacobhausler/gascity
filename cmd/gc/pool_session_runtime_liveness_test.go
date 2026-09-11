@@ -74,3 +74,57 @@ func sessionAssignmentIsLiveForTest(beadLive bool, assignee string, absent runti
 	}
 	return !absent(assignee)
 }
+
+// cr-1jicje: an orphaned seat holding assigned work was a DEADLOCK, not a slow
+// clear. closeSessionBeadIfRuntimeStoppedAndUnassigned refuses to close a bead
+// that has assigned work — correctly — while repairStrandedPoolWorkerBead, the
+// thing that would unassign that work, was gated on a freeable sleep_reason
+// that an orphaned seat does not have. So the work was never released, the bead
+// never closed, and the slot never freed. Measured 24+ minutes across six polls
+// on a cap-2 lane, with a routed atom open and unassigned throughout.
+//
+// The break is evidence, not a wider allow-list: a runtime that positively
+// reports the box gone is an ANSWER, and a stronger one than any inferred sleep
+// reason. An unknown state with no runtime evidence stays denied.
+func TestConfirmedRuntimeAbsenceBreaksTheOrphanedSeatDeadlock(t *testing.T) {
+	const seat = "worker-local-1-pool"
+
+	cases := []struct {
+		name          string
+		freeableState bool
+		probe         runtimeAbsenceProbe
+		wantRepair    bool
+		why           string
+	}{
+		{"freeable state, no probe", true, nil, true,
+			"today's behaviour must be unchanged when no probe is installed"},
+		{"unfreeable state, no probe", false, nil, false,
+			"an unrecognised state with NO evidence stays denied — deny-by-default is deliberate"},
+		{"unfreeable state, runtime confirms gone", false,
+			func(string) bool { return true }, true,
+			"positive evidence the box is gone is what breaks the deadlock"},
+		{"unfreeable state, runtime uncertain", false,
+			func(string) bool { return false }, false,
+			"an unreadable or still-present runtime must NOT authorise touching an unknown state"},
+		{"freeable state, runtime uncertain", true,
+			func(string) bool { return false }, true,
+			"the probe may only WIDEN here; it must never veto an already-freeable state"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := poolRepairAuthorisedForTest(tc.freeableState, seat, tc.probe)
+			if got != tc.wantRepair {
+				t.Fatalf("repair authorised = %v, want %v — %s", got, tc.wantRepair, tc.why)
+			}
+		})
+	}
+}
+
+// poolRepairAuthorisedForTest mirrors the gate's composition rule without a
+// reconciler tick: the freeable-state answer is the input, so this pins how the
+// probe COMBINES with it rather than re-testing either half.
+func poolRepairAuthorisedForTest(freeableState bool, seat string, absent runtimeAbsenceProbe) bool {
+	confirmedGone := absent != nil && absent(seat)
+	return freeableState || confirmedGone
+}

@@ -3967,7 +3967,26 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// of minting a fresh canonical owner.
 		hasAssignedWork := false
 		poolManagedDead := !shouldWake && !target.alive && isPoolManagedSessionInfo(info)
-		poolFreeable := poolManagedDead && isPoolSessionSlotFreeableInfo(info)
+		// A state we do not recognise is not the same as a state we have
+		// EVIDENCE about. isPoolSessionSlotFreeableInfo denies by default
+		// because an unknown sleep_reason might mean the seat is alive — but a
+		// runtime that positively reports the box gone is not an unknown, it is
+		// an answer, and a stronger one than any inferred sleep reason.
+		//
+		// This breaks a genuine deadlock (cr-1jicje). An orphaned seat holding
+		// assigned work could never be cleaned up:
+		//   closeSessionBeadIfRuntimeStoppedAndUnassigned refuses to close a
+		//   bead that HAS assigned work (session_beads.go, and rightly so),
+		//   while repairStrandedPoolWorkerBead — the thing that would unassign
+		//   that work — was gated on poolFreeable, which an orphaned seat fails.
+		//   So the work was never released, the bead never closed, and the slot
+		//   never freed. Measured 24+ minutes across six polls on a cap-2 lane.
+		//
+		// runtimeAbsent is the same fail-closed probe the orphan-release path
+		// uses: any list error, partial list, or still-present session answers
+		// "not absent" and nothing widens.
+		runtimeConfirmedGone := poolManagedDead && runtimeAbsent != nil && runtimeAbsent(name)
+		poolFreeable := poolManagedDead && (isPoolSessionSlotFreeableInfo(info) || runtimeConfirmedGone)
 		// "Can I free this slot" and "should I tell someone" are different
 		// questions, and gating both on freeability made the worst case the
 		// quietest one. A pool seat whose runtime is gone but whose state is NOT
