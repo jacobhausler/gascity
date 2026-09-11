@@ -362,7 +362,7 @@ func releaseOrphanedPoolAssignments(
 			if assigneePreservesNamedSessionRoute(cfg, cityPath, template, assignee, workStoreRef, storeRefAware) {
 				continue
 			}
-			if liveOpenSessionAssignmentExists(sessionStore.Store, assignee) {
+			if sessionAssignmentIsLive(sessionStore.Store, assignee) {
 				continue
 			}
 			// The sessions binding is not the only ledger that can hold a session
@@ -373,7 +373,7 @@ func releaseOrphanedPoolAssignments(
 			// claims. A session bead of that shape lives in the work bead's own
 			// owner store, so probing that one store after the sessions store
 			// misses closes the gap without enumerating every attached store.
-			if ownerStore != nil && liveOpenSessionAssignmentExists(ownerStore, assignee) {
+			if ownerStore != nil && sessionAssignmentIsLive(ownerStore, assignee) {
 				continue
 			}
 		}
@@ -859,14 +859,24 @@ type runtimeAbsenceProbe func(assignee string) bool
 // The probe can only ever turn a LIVE answer into a dead one, never the
 // reverse, and only on a confirmed absence. A nil probe is exactly today's
 // behaviour.
-func sessionAssignmentIsLive(store beads.Store, assignee string, absent runtimeAbsenceProbe) bool {
+// runtimeAbsent is the orphan-release path's second liveness source. It is a
+// package-level hook rather than a parameter ON PURPOSE: releaseOrphanedPool-
+// Assignments is constructed directly by a dozen tests across eight files, and
+// threading an argument through all of them churns files this change has no
+// business touching. nil - the zero value, and what every test sees - is
+// exactly today's behaviour.
+//
+// Set once by the controller, the only place the session provider is reachable.
+var runtimeAbsent runtimeAbsenceProbe
+
+func sessionAssignmentIsLive(store beads.Store, assignee string) bool {
 	if !liveOpenSessionAssignmentExists(store, assignee) {
 		return false
 	}
-	if absent == nil {
+	if runtimeAbsent == nil {
 		return true
 	}
-	return !absent(assignee)
+	return !runtimeAbsent(assignee)
 }
 
 func liveOpenSessionAssignmentExists(store beads.Store, assignee string) bool {

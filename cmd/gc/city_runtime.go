@@ -2555,6 +2555,35 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 	assignedWorkStoreRefs := result.AssignedWorkStoreRefs
 	assignedWorkStores := result.AssignedWorkStores
 	phaseStart := time.Now()
+	// Second liveness source for runtime-backed seats (cr-5udnb3). The bead
+	// answer alone cannot see a box that died: in a Nomad alloc the session bead
+	// and the runtime are two things on two machines, so a SIGKILLed allocation
+	// leaves the bead open, labelled and "live" while the seat is a corpse, and
+	// the claim is never released. Measured T5, 2026-09-11.
+	//
+	// Built here because this is where the provider is reachable. It FAILS
+	// CLOSED by construction: a nil provider, any list error, and any session
+	// still present all answer "not absent", so the bead answer stands and the
+	// claim is kept. Only a complete enumeration that does not contain the
+	// assignee may release. Reading an unreadable provider as "not running"
+	// would release live work fleet-wide on a transient blip - the same argument
+	// the shutdown path makes below about ungraceful mass kills.
+	runtimeAbsent = func(assignee string) bool {
+		assignee = strings.TrimSpace(assignee)
+		if assignee == "" || cr.sp == nil {
+			return false
+		}
+		running, err := cr.sp.ListRunning("")
+		if err != nil {
+			return false
+		}
+		for _, sess := range running {
+			if strings.EqualFold(strings.TrimSpace(sess), assignee) {
+				return false
+			}
+		}
+		return true
+	}
 	released := releaseOrphanedPoolAssignmentsWhenSnapshotsComplete(store, sessStore, cr.cfg, cr.cityPath, sessionBeads.OpenInfos(), result, rigStores)
 	recordPhase(TraceSiteControllerTickPhase, "bead_reconcile.release_orphaned_pool_assignments", phaseStart, map[string]any{
 		"released_count": len(released),
