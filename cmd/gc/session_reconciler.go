@@ -3966,8 +3966,28 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// keep the same bead so later wake/restart happens in place instead
 		// of minting a fresh canonical owner.
 		hasAssignedWork := false
-		poolFreeable := !shouldWake && !target.alive && isPoolSessionSlotFreeableInfo(info) && isPoolManagedSessionInfo(info)
-		if poolFreeable {
+		poolManagedDead := !shouldWake && !target.alive && isPoolManagedSessionInfo(info)
+		poolFreeable := poolManagedDead && isPoolSessionSlotFreeableInfo(info)
+		// "Can I free this slot" and "should I tell someone" are different
+		// questions, and gating both on freeability made the worst case the
+		// quietest one. A pool seat whose runtime is gone but whose state is NOT
+		// freeable — orphaned, or asleep with no sleep_reason — held its slot
+		// AND emitted nothing: no diagnostic, no repair, no event. Unreclaimed
+		// and unreported were the same gate, so the lane went dark by
+		// construction while gc session list still showed healthy seats.
+		//
+		// Measured 2026-09-11 on the worker-local nomad lane: one seat sat
+		// orphaned 24+ minutes across six polls and another asleep with an empty
+		// reason for 30, both holding a slot on a cap-2 lane, with a routed atom
+		// open and unassigned the whole time and nothing said about it anywhere.
+		//
+		// The assigned-work read now runs for every dead pool seat. The REPAIR
+		// below stays gated on poolFreeable — acting on a state we do not
+		// recognise is how a seat gets killed under live work, and
+		// isPoolSessionSlotFreeableInfo's deny-by-default is deliberate
+		// (session_state_helpers.go). Reporting it is not dangerous; only
+		// repairing it is.
+		if poolManagedDead {
 			var assignedErr error
 			hasAssignedWork, assignedErr = sessionHasOpenAssignedWorkForReachableStore(cityPath, cfg, store, rigStores, info)
 			if assignedErr != nil {
@@ -3975,7 +3995,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 				hasAssignedWork = true
 			}
 		}
-		if poolFreeable && hasAssignedWork {
+		if poolManagedDead && hasAssignedWork {
 			// The runtime is gone but the session bead still owns
 			// in_progress work — almost always a CLI process that
 			// exited or hung without going through the clean drain
@@ -4002,7 +4022,14 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// fire the repair on the first episode's stale timestamp. Reuses
 			// unclaimWorkAssignedToRetiredSessionInfo, the Info form of the same detach primitive
 			// named-session retirement uses.
-			if !storeQueryPartial &&
+			// poolFreeable, not poolManagedDead: the DIAGNOSTIC above now fires
+			// for every dead pool seat, but the repair still only acts on a state
+			// this code recognises. Unassigning work and closing a session bead
+			// on an unrecognised state is how a seat gets killed under live work,
+			// and isPoolSessionSlotFreeableInfo's deny-by-default exists for
+			// exactly that (session_state_helpers.go). A stuck seat we do not
+			// understand gets reported loudly and touched not at all.
+			if poolFreeable && !storeQueryPartial &&
 				repairStrandedPoolWorkerBead(cityPath, cfg, store, rigStores, infoByID[target.info.ID], retiredSessionFallbackRouteInfo(infoByID[target.info.ID]), clk, stderr) {
 				tick.markClosed(target.info.ID)
 				pruneAgentHomeWorktreeIfSafeInfo(infoByID[target.info.ID], cityPath, cfg, stderr)
