@@ -127,6 +127,34 @@ func remoteHookCurrent(client *api.Client, sessionID string, idOnly bool, stdout
 	return 0
 }
 
+// remoteHookDrainAck is the remote leg of `gc hook --drain-ack` WITHOUT
+// --claim: the claim-free ack. It resolves the calling session, posts the drain
+// acknowledgement, and returns. It never enters the claim protocol, never reads
+// the work query, and cannot come back holding a bead.
+//
+// That last property is the whole point. `--claim --drain-ack` acknowledges the
+// drain only on a NO-WORK result, so a finished one_shot seat calling it picks
+// up another bead whenever the pool has work and then exits holding it - the
+// claim path does not consult the agent's lifecycle. A seat on its way out
+// needs a door that can only say "I am done".
+func remoteHookDrainAck(client *api.Client, opts hookCommandOptions, stdout, stderr io.Writer) int {
+	sessionID, err := remoteWorkerSessionID()
+	if err != nil {
+		fmt.Fprintf(stderr, "gc hook --drain-ack: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if err := client.WorkerDrainAck(sessionID); err != nil {
+		fmt.Fprintf(stderr, "gc hook --drain-ack: %v\n", err) //nolint:errcheck
+		return 1
+	}
+	if opts.JSON {
+		fmt.Fprintf(stdout, "{\"action\":\"drain\",\"reason\":\"drain_ack\",\"drain_ack\":true,\"session\":%q}\n", sessionID) //nolint:errcheck
+		return 0
+	}
+	fmt.Fprintf(stdout, "drain acknowledged (session %s)\n", sessionID) //nolint:errcheck
+	return 0
+}
+
 // remoteHookClaim is the remote leg of `gc hook --claim`. It emits the same
 // result schema the local path emits — the consumer is a startup wrapper that
 // cannot tell which leg produced its line, and must not have to.

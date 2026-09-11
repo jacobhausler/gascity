@@ -254,10 +254,6 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	// Accepted for compatibility with installed hook commands; non-inject
 	// gc hook output ignores provider-specific formatting.
 	_ = opts.HookFormat
-	if opts.DrainAck && !opts.Claim {
-		fmt.Fprintln(stderr, "gc hook: --drain-ack requires --claim") //nolint:errcheck
-		return 1
-	}
 
 	// Remote leg. Resolved before any city work because every step below —
 	// agent resolution, config load, the work query — reads a city from local
@@ -269,6 +265,36 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 	if err != nil {
 		fmt.Fprintf(stderr, "gc hook: %v\n", err) //nolint:errcheck // best-effort stderr
 		return 1
+	}
+	// --drain-ack WITHOUT --claim is the claim-free ack. It exists for one
+	// caller: a one_shot seat inside a runtime box that has finished its atom
+	// and must tell the controller so.
+	//
+	// Locally that seat runs `gc runtime drain-ack`, which resolves a city path
+	// from GC_CITY/GC_CITY_PATH/GC_CITY_ROOT — the env family the remote
+	// contract forbids and the nomad runtime pack strips — so in a box it can
+	// never succeed. The only wire spelling was `--claim --drain-ack`, whose ack
+	// fires solely on a NO-WORK result, so a finished seat calling it CLAIMS
+	// ANOTHER BEAD whenever the pool has work and exits holding it. The claim
+	// path is lifecycle-blind — nothing in cmd_hook_claim.go or
+	// internal/config/workquery.go consults the agent's one_shot lifecycle — so
+	// that is not a theoretical race.
+	//
+	// Measured on a live lane 2026-09-11: the seat completes its atom, cannot
+	// signal completion, never reaches freeable-asleep, and holds its pool slot
+	// forever while gc session list and nomad both show a healthy running seat.
+	// The lane serves max_active_sessions atoms and then goes dark looking
+	// alive. build_desired_state_pool_info.go:211-227 already documents the slot
+	// half of this ("until an operator manually closes it").
+	//
+	// So the refusal stands LOCALLY, where a claim-free ack already exists with
+	// a better spelling, and lifts remotely, where none did.
+	if opts.DrainAck && !opts.Claim {
+		if !isRemote {
+			fmt.Fprintln(stderr, "gc hook: --drain-ack without --claim is the remote ack; on a local city use `gc runtime drain-ack`") //nolint:errcheck
+			return 1
+		}
+		return remoteHookDrainAck(client, opts, stdout, stderr)
 	}
 	if isRemote {
 		if !opts.Claim {
