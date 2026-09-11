@@ -145,6 +145,19 @@ func doBuildImageWithResult(args []string, tag, baseImage string, rigPaths []str
 		rigs[name] = path
 	}
 
+	// Load the fully composed city so Nomad-routed Codex provider settings can
+	// be baked into the image without copying any credential values.
+	cfg, _, err := loadConfigCommandCityConfig(cityPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc build-image: loading city config: %v\n", err) //nolint:errcheck // best-effort stderr
+		return result, 1
+	}
+	codexConfig, err := buildimage.RenderRuntimeCodexConfig(cfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "gc build-image: rendering Codex config: %v\n", err) //nolint:errcheck // best-effort stderr
+		return result, 1
+	}
+
 	// Create temp output dir (or use a named one for context-only).
 	outputDir, err := os.MkdirTemp("", "gc-build-image-*")
 	if err != nil {
@@ -157,12 +170,13 @@ func doBuildImageWithResult(args []string, tag, baseImage string, rigPaths []str
 
 	// Assemble build context.
 	opts := buildimage.Options{
-		CityPath:  cityPath,
-		OutputDir: outputDir,
-		BaseImage: baseImage,
-		Tag:       tag,
-		RigPaths:  rigs,
-		Stderr:    stderr,
+		CityPath:    cityPath,
+		OutputDir:   outputDir,
+		BaseImage:   baseImage,
+		Tag:         tag,
+		RigPaths:    rigs,
+		Stderr:      stderr,
+		CodexConfig: codexConfig,
 	}
 	if err := buildImageAssembleContext(opts); err != nil {
 		fmt.Fprintf(stderr, "gc build-image: %v\n", err) //nolint:errcheck // best-effort stderr

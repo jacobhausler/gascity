@@ -73,6 +73,28 @@ func TestResolveTemplateInjectsUpstreamServingEnv(t *testing.T) {
 	}
 }
 
+func TestResolveTemplateOmitsHostCodexHomeForNomad(t *testing.T) {
+	params := upstreamTestParams(t, &config.City{})
+	params.providers = map[string]config.ProviderSpec{
+		"test": {
+			Command: "echo",
+			Env:     map[string]string{"CODEX_HOME": "/Users/home/.codex", "KEEP": "value"},
+		},
+	}
+	agent := &config.Agent{Name: "runner", RuntimeProvider: "nomad"}
+
+	tp, err := resolveTemplate(params, agent, agent.QualifiedName(), nil)
+	if err != nil {
+		t.Fatalf("resolveTemplate: %v", err)
+	}
+	if _, ok := tp.Env["CODEX_HOME"]; ok {
+		t.Fatalf("Nomad template retained host CODEX_HOME: %v", tp.Env)
+	}
+	if got := tp.Env["KEEP"]; got != "value" {
+		t.Fatalf("Nomad template dropped unrelated provider env: %v", tp.Env)
+	}
+}
+
 // The same ABSTRACT upstream renders onto different env-var names per harness
 // (claude → ANTHROPIC_*, codex → OPENAI_*) via the provider's upstream_env
 // binding — the harness-portability payoff.

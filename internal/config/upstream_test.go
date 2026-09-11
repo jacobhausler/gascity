@@ -141,3 +141,26 @@ upstream = "bedrock"
 		t.Errorf("special upstream = %q, want bedrock (explicit, not overridden by default)", got)
 	}
 }
+
+func TestRuntimeProviderEnvDropsHostCodexHomeOnlyForNomad(t *testing.T) {
+	provider := &ResolvedProvider{Env: map[string]string{
+		"CODEX_HOME": "/Users/home/.codex",
+		"KEEP":       "value",
+	}}
+
+	nomad := RuntimeProviderEnv(provider, "nomad")
+	if _, ok := nomad["CODEX_HOME"]; ok {
+		t.Fatalf("Nomad provider env retained host CODEX_HOME: %v", nomad)
+	}
+	if nomad["KEEP"] != "value" {
+		t.Fatalf("Nomad provider env dropped unrelated value: %v", nomad)
+	}
+
+	local := RuntimeProviderEnv(provider, "subprocess")
+	if local["CODEX_HOME"] != "/Users/home/.codex" {
+		t.Fatalf("local provider env changed CODEX_HOME: %v", local)
+	}
+	if provider.Env["CODEX_HOME"] != "/Users/home/.codex" {
+		t.Fatalf("RuntimeProviderEnv mutated the resolved provider: %v", provider.Env)
+	}
+}

@@ -61,6 +61,37 @@ name = "test-city"
 	}
 }
 
+func TestAssembleContextBakesCodexHomeConfig(t *testing.T) {
+	cityDir := t.TempDir()
+	outputDir := t.TempDir()
+
+	writeFile(t, cityDir, "city.toml", "[workspace]\nname = \"test-city\"\n")
+	configToml := []byte("model_provider = \"haus_qwen\"\n")
+
+	if err := AssembleContext(Options{
+		CityPath:    cityDir,
+		OutputDir:   outputDir,
+		CodexConfig: configToml,
+	}); err != nil {
+		t.Fatalf("AssembleContext: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(outputDir, "codex-home", "config.toml"))
+	if err != nil {
+		t.Fatalf("reading baked Codex config: %v", err)
+	}
+	if string(got) != string(configToml) {
+		t.Fatalf("baked Codex config = %q, want %q", got, configToml)
+	}
+	dockerfile, err := os.ReadFile(filepath.Join(outputDir, "Dockerfile"))
+	if err != nil {
+		t.Fatalf("reading Dockerfile: %v", err)
+	}
+	if !strings.Contains(string(dockerfile), "COPY codex-home/ /home/gcagent/.codex/") {
+		t.Fatalf("Dockerfile does not copy the baked Codex home:\n%s", dockerfile)
+	}
+}
+
 func TestAssembleContextExcludes(t *testing.T) {
 	cityDir := t.TempDir()
 	outputDir := t.TempDir()

@@ -26,6 +26,9 @@ type Options struct {
 	RigPaths map[string]string
 	// Stderr receives non-fatal diagnostics. Defaults to os.Stderr.
 	Stderr io.Writer
+	// CodexConfig is the secret-free config.toml to bake into the default
+	// gcagent Codex home. Empty means no Codex home is added to the image.
+	CodexConfig []byte
 }
 
 // Manifest records what was baked into the image for debugging.
@@ -98,6 +101,16 @@ func AssembleContext(opts Options) error {
 		}
 	}
 
+	if len(opts.CodexConfig) > 0 {
+		codexHomeDir := filepath.Join(opts.OutputDir, "codex-home")
+		if err := os.MkdirAll(codexHomeDir, 0o755); err != nil {
+			return fmt.Errorf("creating Codex home: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(codexHomeDir, "config.toml"), opts.CodexConfig, 0o600); err != nil {
+			return fmt.Errorf("writing Codex config: %w", err)
+		}
+	}
+
 	// Write prebaked manifest.
 	cityName := filepath.Base(opts.CityPath)
 	manifest := Manifest{
@@ -115,7 +128,7 @@ func AssembleContext(opts Options) error {
 	}
 
 	// Generate Dockerfile.
-	dockerfile := GenerateDockerfile(opts.BaseImage)
+	dockerfile := GenerateDockerfileWithCodexHome(opts.BaseImage, len(opts.CodexConfig) > 0)
 	if err := os.WriteFile(filepath.Join(opts.OutputDir, "Dockerfile"), dockerfile, 0o644); err != nil {
 		return fmt.Errorf("writing Dockerfile: %w", err)
 	}

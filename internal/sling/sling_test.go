@@ -2616,6 +2616,41 @@ func TestSlingAttachGraphFormulaCreatesConvoyFirstRoot(t *testing.T) {
 	}
 }
 
+func TestSlingAttachGraphFormulaClearsStaleClaimRoute(t *testing.T) {
+	formulaDir := t.TempDir()
+	writeGraphV2ConvoyFormula(t, formulaDir)
+	cfg := graphV2SlingTestConfig(t, formulaDir)
+	deps := testDeps(cfg, runtime.NewFake(), newFakeRunner().run)
+	source, err := deps.Store.Create(beads.Bead{
+		Title:    "work",
+		Type:     "task",
+		Status:   "open",
+		Metadata: map[string]string{beadmeta.RoutedToMetadataKey: "mechanic"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := New(deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AttachFormula(context.Background(), "graph-work", source.ID, config.Agent{Name: "mayor", MaxActiveSessions: intPtr(1)}, FormulaOpts{}); err != nil {
+		t.Fatalf("AttachFormula: %v", err)
+	}
+
+	sourceAfter, err := deps.Store.Get(source.ID)
+	if err != nil {
+		t.Fatalf("Get(source): %v", err)
+	}
+	if got := sourceAfter.Metadata[beadmeta.RoutedToMetadataKey]; got != "" {
+		t.Fatalf("source gc.routed_to = %q, want empty after graph attach", got)
+	}
+	if got := sourceAfter.Metadata[beadmeta.ExecutionRoutedToMetadataKey]; got != "mayor" {
+		t.Fatalf("source gc.execution_routed_to = %q, want mayor", got)
+	}
+}
+
 // TestRestampWorkBeadRoutingCollapsesPoolInstanceResolvedViaResolveAgent
 // guards the actual production resolution path for a pool-instance target.
 // An agent obtained via agentutil.ResolveAgent -- as the real CLI/API

@@ -5,6 +5,27 @@ import (
 	"strings"
 )
 
+// NomadRuntimeProvider is the selection name used by the Nomad runtime pack.
+// It is kept here with the runtime-selection helpers so config composition can
+// recognize the remote-runtime boundary without duplicating the literal.
+const NomadRuntimeProvider = "nomad"
+
+// RuntimeProviderEnv returns the provider environment safe to pass to the
+// selected runtime. A Nomad allocation cannot resolve a host-side Codex home,
+// so CODEX_HOME is deliberately omitted at that boundary; the runtime owns
+// the in-allocation home. Other runtimes retain the existing provider env.
+// The returned map is always detached from the resolved provider.
+func RuntimeProviderEnv(provider *ResolvedProvider, runtimeProvider string) map[string]string {
+	if provider == nil || len(provider.Env) == 0 {
+		return nil
+	}
+	env := cloneStringMap(provider.Env)
+	if strings.TrimSpace(runtimeProvider) == NomadRuntimeProvider {
+		delete(env, "CODEX_HOME")
+	}
+	return env
+}
+
 // RuntimeProviderSource names where a resolved runtime selection came from.
 type RuntimeProviderSource string
 

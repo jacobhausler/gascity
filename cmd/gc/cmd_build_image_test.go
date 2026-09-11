@@ -68,6 +68,51 @@ name = "test-city"
 	_ = os.RemoveAll(outputDir)
 }
 
+func TestBuildImageContextOnlyBakesNomadCodexConfig(t *testing.T) {
+	cityDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(cityDir, "city.toml"), []byte(`[workspace]
+name = "test-city"
+
+[providers.qwen]
+base = "builtin:codex"
+args_append = ["-c", "model_provider=haus_qwen", "-c", "model=qwen-model"]
+
+[upstreams.firehose]
+base_url = "http://gateway.example/v1"
+api_key = "$OPENAI_API_KEY"
+api_key_env = "OPENAI_API_KEY"
+
+[[agent]]
+name = "worker"
+provider = "qwen"
+runtime_provider = "nomad"
+upstream = "firehose"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := doBuildImage([]string{cityDir}, "", "gc-agent:latest", nil, false, true, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("doBuildImage returned %d; stderr: %s", code, stderr.String())
+	}
+	parts := strings.SplitN(strings.TrimSpace(stdout.String()), ": ", 2)
+	if len(parts) != 2 {
+		t.Fatalf("unexpected stdout format: %q", stdout.String())
+	}
+	outputDir := parts[1]
+	defer func() { _ = os.RemoveAll(outputDir) }()
+
+	configToml, err := os.ReadFile(filepath.Join(outputDir, "codex-home", "config.toml"))
+	if err != nil {
+		t.Fatalf("reading baked Codex config: %v", err)
+	}
+	if !strings.Contains(string(configToml), `[model_providers.haus_qwen]`) ||
+		!strings.Contains(string(configToml), `base_url = "http://gateway.example/v1"`) {
+		t.Fatalf("baked Codex config = %s", configToml)
+	}
+}
+
 func TestBuildImageRequiresTag(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := doBuildImage(

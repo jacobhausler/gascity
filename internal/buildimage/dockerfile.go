@@ -10,6 +10,13 @@ import (
 // The generated image copies the pre-staged workspace directory and touches
 // the ready sentinel so the entrypoint skips the wait.
 func GenerateDockerfile(baseImage string) []byte {
+	return GenerateDockerfileWithCodexHome(baseImage, false)
+}
+
+// GenerateDockerfileWithCodexHome returns a Dockerfile for a prebaked agent
+// image, optionally copying the generated Codex home into the image's default
+// gcagent home.
+func GenerateDockerfileWithCodexHome(baseImage string, bakeCodexHome bool) []byte {
 	// Reject newlines to prevent Dockerfile directive injection.
 	if strings.ContainsAny(baseImage, "\n\r") {
 		baseImage = strings.NewReplacer("\n", "", "\r", "").Replace(baseImage)
@@ -19,10 +26,17 @@ ARG BASE=%s
 FROM ${BASE}
 USER root
 COPY workspace/ /workspace/
+%s
 # chown to gcagent (default). When LINUX_USERNAME is set at runtime, the pod
 # entrypoint re-chowns the workspace to the dynamic user.
-RUN chown -R gcagent:gcagent /workspace && touch /workspace/.gc-workspace-ready
+RUN chown -R gcagent:gcagent /workspace%s && touch /workspace/.gc-workspace-ready
 USER gcagent
 `
-	return []byte(fmt.Sprintf(tmpl, baseImage))
+	codexCopy := ""
+	codexChown := ""
+	if bakeCodexHome {
+		codexCopy = "COPY codex-home/ /home/gcagent/.codex/"
+		codexChown = " /home/gcagent/.codex"
+	}
+	return []byte(fmt.Sprintf(tmpl, baseImage, codexCopy, codexChown))
 }

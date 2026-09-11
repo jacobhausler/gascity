@@ -479,7 +479,9 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	if p.workspace != nil {
 		workspaceEnv = p.workspace.Env
 	}
-	env := mergeEnv(passthroughEnv(), expandEnvMap(workspaceEnv), expandEnvMap(resolved.Env), expandEnvMap(cfgAgent.Env), agentEnv)
+	runtimeProvider := laneRuntimeProviderForAgent(p.city, p.rigs, cfgAgent)
+	providerEnv := config.RuntimeProviderEnv(resolved, runtimeProvider)
+	env := mergeEnv(passthroughEnv(), expandEnvMap(workspaceEnv), expandEnvMap(providerEnv), expandEnvMap(cfgAgent.Env), agentEnv)
 	processenv.PrependGCBinDirToPATH(env, env["GC_BIN"])
 	env = convergence.ScrubTokenEnv(env)
 
@@ -739,7 +741,7 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		RigRoot:          rigRoot,
 		WakeMode:         cfgAgent.WakeMode,
 		IsACP:            sessionTransport == config.SessionTransportACP,
-		RuntimeProvider:  laneRuntimeProviderForAgent(p.city, p.rigs, cfgAgent),
+		RuntimeProvider:  runtimeProvider,
 		HookEnabled:      hasHooks,
 		MCPServers:       mcpServers,
 	}
