@@ -24,19 +24,31 @@ func TestSessionAssignmentLivenessProbeOnlyNarrowsAndFailsClosed(t *testing.T) {
 		want  bool
 		why   string
 	}{
-		{"bead dead, no probe", false, nil, false,
-			"a dead bead is dead regardless of the runtime"},
-		{"bead live, no probe", true, nil, true,
-			"a nil probe must be exactly today's behaviour"},
-		{"bead live, runtime confirms absent", true,
+		{
+			"bead dead, no probe", false,
+			nil, false,
+			"a dead bead is dead regardless of the runtime",
+		},
+		{
+			"bead live, no probe", true,
+			nil, true,
+			"a nil probe must be exactly today's behaviour",
+		},
+		{
+			"bead live, runtime confirms absent", true,
 			func(string) bool { return true }, false,
-			"a confirmed absence is the whole point: the box is a corpse"},
-		{"bead live, runtime uncertain", true,
+			"a confirmed absence is the whole point: the box is a corpse",
+		},
+		{
+			"bead live, runtime uncertain", true,
 			func(string) bool { return false }, true,
-			"an unreadable or partial runtime must NOT release live work"},
-		{"bead dead, runtime says present", false,
+			"an unreadable or partial runtime must NOT release live work",
+		},
+		{
+			"bead dead, runtime says present", false,
 			func(string) bool { return false }, false,
-			"the probe may only narrow: it can never resurrect a dead bead"},
+			"the probe may only narrow: it can never resurrect a dead bead",
+		},
 	}
 
 	for _, tc := range cases {
