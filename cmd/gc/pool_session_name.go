@@ -831,6 +831,44 @@ func verifyReleasedPoolAssignment(store beads.Store, id, expectedAssignee string
 	log.Printf("releaseOrphanedPoolAssignments: RELEASE RACE on %s: observed assignee %q immediately after releasing %q — a concurrent claim raced the orphan release", id, observed, expectedAssignee)
 }
 
+// runtimeAbsenceProbe reports that a runtime-backed session is CONFIRMED gone.
+//
+// It must answer false for every uncertainty — an unreadable provider, a
+// partial list, a session whose agent declares no runtime_provider. Only a
+// positive, complete enumeration that does not contain the session may answer
+// true. Releasing live work fleet-wide on a transient provider blip is a far
+// worse failure than leaving one claim held, and city_runtime.go already makes
+// exactly this argument for the shutdown path: "a failed ListRunning yields an
+// empty slice ... would turn a transient listing error into an ungraceful mass
+// kill of sessions we never enumerated".
+type runtimeAbsenceProbe func(assignee string) bool
+
+// sessionAssignmentIsLive is liveOpenSessionAssignmentExists plus a second
+// source for runtime-backed seats.
+//
+// The bead answer alone is sound for a tmux seat, where the pane and the
+// session bead die together — measured working 33 times in six hours on
+// 2026-09-11. It is NOT sound for a seat in a Nomad box: those are two things
+// on two machines, so SIGKILLing the allocation leaves the session bead open,
+// labelled and "live" while the box is a corpse. Measured the same day (T5,
+// cr-5udnb3): alloc killed at 19:15:20Z, Nomad reporting ClientStatus=failed
+// twenty seconds later, and the bead still in_progress and still assigned four
+// minutes on. The predicate answered TRUE about a corpse and the claim was
+// never released.
+//
+// The probe can only ever turn a LIVE answer into a dead one, never the
+// reverse, and only on a confirmed absence. A nil probe is exactly today's
+// behaviour.
+func sessionAssignmentIsLive(store beads.Store, assignee string, absent runtimeAbsenceProbe) bool {
+	if !liveOpenSessionAssignmentExists(store, assignee) {
+		return false
+	}
+	if absent == nil {
+		return true
+	}
+	return !absent(assignee)
+}
+
 func liveOpenSessionAssignmentExists(store beads.Store, assignee string) bool {
 	assignee = strings.TrimSpace(assignee)
 	if store == nil || assignee == "" {
