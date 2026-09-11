@@ -85,35 +85,49 @@ func sessionAssignmentIsLiveForTest(beadLive bool, assignee string, absent runti
 //
 // The break is evidence, not a wider allow-list: a runtime that positively
 // reports the box gone is an ANSWER, and a stronger one than any inferred sleep
-// reason. An unknown state with no runtime evidence stays denied.
+// reason. An unknown state with no runtime evidence stays denied, and a seat
+// claiming state=asleep is excluded outright: it is asserting its box is
+// legitimately gone, so absence is not news about it.
 func TestConfirmedRuntimeAbsenceBreaksTheOrphanedSeatDeadlock(t *testing.T) {
 	const seat = "worker-local-1-pool"
 
 	cases := []struct {
 		name          string
 		freeableState bool
+		dormant       bool
 		probe         runtimeAbsenceProbe
 		wantRepair    bool
 		why           string
 	}{
-		{"freeable state, no probe", true, nil, true,
+		{"freeable state, no probe", true, false, nil, true,
 			"today's behaviour must be unchanged when no probe is installed"},
-		{"unfreeable state, no probe", false, nil, false,
+		{"unfreeable state, no probe", false, false, nil, false,
 			"an unrecognised state with NO evidence stays denied — deny-by-default is deliberate"},
-		{"unfreeable state, runtime confirms gone", false,
+		{"orphaned state, runtime confirms gone", false, false,
 			func(string) bool { return true }, true,
 			"positive evidence the box is gone is what breaks the deadlock"},
-		{"unfreeable state, runtime uncertain", false,
+		{"unfreeable state, runtime uncertain", false, false,
 			func(string) bool { return false }, false,
 			"an unreadable or still-present runtime must NOT authorise touching an unknown state"},
-		{"freeable state, runtime uncertain", true,
+		{"freeable state, runtime uncertain", true, false,
 			func(string) bool { return false }, true,
 			"the probe may only WIDEN here; it must never veto an already-freeable state"},
+		// The case whose absence let a regression through: a dormant seat is
+		// absent from the runtime BECAUSE it is asleep. Treating that as death
+		// retired healthy resumable workers on every scale check.
+		{"dormant asleep seat, runtime absent", false, true,
+			func(string) bool { return true }, false,
+			"state=asleep asserts the box is legitimately gone; absence confirms nothing and must not reap it"},
+		{"dormant asleep seat, no probe", false, true, nil, false,
+			"dormancy is denied with or without a probe"},
+		{"drain-acked asleep seat stays freeable while dormant", true, true,
+			func(string) bool { return true }, true,
+			"a recognised freeable sleep_reason still frees its slot; dormancy only withholds the EXTRA authority"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := poolRepairAuthorisedForTest(tc.freeableState, seat, tc.probe)
+			got := poolSlotRepairAuthorised(tc.freeableState, tc.dormant, seat, tc.probe)
 			if got != tc.wantRepair {
 				t.Fatalf("repair authorised = %v, want %v — %s", got, tc.wantRepair, tc.why)
 			}
@@ -121,10 +135,3 @@ func TestConfirmedRuntimeAbsenceBreaksTheOrphanedSeatDeadlock(t *testing.T) {
 	}
 }
 
-// poolRepairAuthorisedForTest mirrors the gate's composition rule without a
-// reconciler tick: the freeable-state answer is the input, so this pins how the
-// probe COMBINES with it rather than re-testing either half.
-func poolRepairAuthorisedForTest(freeableState bool, seat string, absent runtimeAbsenceProbe) bool {
-	confirmedGone := absent != nil && absent(seat)
-	return freeableState || confirmedGone
-}

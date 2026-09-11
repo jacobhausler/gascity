@@ -105,3 +105,41 @@ func isPoolSessionSlotFreeableInfo(i sessionpkg.Info) bool {
 	}
 	return false
 }
+
+// poolSlotRepairAuthorised decides whether a DEAD pool-managed seat may have its
+// assigned work released and its slot reclaimed.
+//
+// It exists to break a real deadlock (cr-1jicje) without widening the
+// allow-list that isPoolSessionSlotFreeableInfo deliberately keeps narrow:
+// closeSessionBeadIfRuntimeStoppedAndUnassigned refuses to close a session bead
+// that still HAS assigned work — rightly — while repairStrandedPoolWorkerBead,
+// the thing that would unassign that work, was gated on a freeable sleep_reason
+// an orphaned seat does not have. Neither side could move.
+//
+// The extra authority is EVIDENCE, and it is deliberately not available to a
+// dormant seat. A session carrying state=asleep is ASSERTING that its box is
+// legitimately gone, so runtime absence tells us nothing we did not already
+// know — a sleep-capable worker is absent from the runtime precisely because it
+// is asleep, and reaping it on that basis retires healthy, resumable seats
+// (proven by the scale-check dormancy retention tests). For a seat making no
+// such claim — orphaned, or any unrecognised non-dormant state — the box SHOULD
+// be up, so a runtime that positively reports it gone is an answer, and a
+// stronger one than any inferred sleep reason.
+//
+// absent is fail-closed: a nil probe, a list error, a partial list or a
+// still-present session all answer "not absent", so an unreadable runtime
+// widens nothing. A freeable state is never vetoed — the probe may only widen.
+func poolSlotRepairAuthorised(freeableState, dormant bool, seat string, absent runtimeAbsenceProbe) bool {
+	if freeableState {
+		return true
+	}
+	if dormant {
+		return false
+	}
+	return absent != nil && absent(seat)
+}
+
+// isDormantSessionInfo reports whether a session claims deliberate dormancy.
+func isDormantSessionInfo(i sessionpkg.Info) bool {
+	return strings.TrimSpace(i.MetadataState) == string(sessionpkg.StateAsleep)
+}

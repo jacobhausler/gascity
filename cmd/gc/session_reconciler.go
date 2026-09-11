@@ -3969,9 +3969,12 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		poolManagedDead := !shouldWake && !target.alive && isPoolManagedSessionInfo(info)
 		// A state we do not recognise is not the same as a state we have
 		// EVIDENCE about. isPoolSessionSlotFreeableInfo denies by default
-		// because an unknown sleep_reason might mean the seat is alive — but a
-		// runtime that positively reports the box gone is not an unknown, it is
-		// an answer, and a stronger one than any inferred sleep reason.
+		// because an unknown sleep_reason might mean the seat is alive — but for
+		// a seat that is NOT claiming dormancy, a runtime that positively
+		// reports the box gone is not an unknown, it is an answer, and a
+		// stronger one than any inferred sleep reason. A seat carrying
+		// state=asleep is excluded: it is asserting its box is legitimately
+		// gone, so absence confirms nothing. See poolSlotRepairAuthorised.
 		//
 		// This breaks a genuine deadlock (cr-1jicje). An orphaned seat holding
 		// assigned work could never be cleaned up:
@@ -3985,8 +3988,8 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// runtimeAbsent is the same fail-closed probe the orphan-release path
 		// uses: any list error, partial list, or still-present session answers
 		// "not absent" and nothing widens.
-		runtimeConfirmedGone := poolManagedDead && runtimeAbsent != nil && runtimeAbsent(name)
-		poolFreeable := poolManagedDead && (isPoolSessionSlotFreeableInfo(info) || runtimeConfirmedGone)
+		poolFreeable := poolManagedDead && poolSlotRepairAuthorised(
+			isPoolSessionSlotFreeableInfo(info), isDormantSessionInfo(info), name, runtimeAbsent)
 		// "Can I free this slot" and "should I tell someone" are different
 		// questions, and gating both on freeability made the worst case the
 		// quietest one. A pool seat whose runtime is gone but whose state is NOT
