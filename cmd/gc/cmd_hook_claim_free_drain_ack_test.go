@@ -49,9 +49,15 @@ func TestRemoteDrainAckNeverEntersTheClaimProtocol(t *testing.T) {
 	if start < 0 {
 		t.Fatal("remoteHookDrainAck is missing: there is no claim-free remote ack")
 	}
-	end := strings.Index(src[start:], "\nfunc ")
+	// End at the function's own closing brace, NOT at the next "\nfunc ": that
+	// would swallow the following function's DOC COMMENT, and the next function
+	// here is remoteHookClaim — so a bare scan indicts this function for a name
+	// that appears only in its neighbour's prose. Same name-is-not-an-invocation
+	// trap this codebase has hit repeatedly; a test that greps source has to
+	// bound its slice to code it actually owns.
+	end := strings.Index(src[start:], "\n}\n")
 	if end < 0 {
-		end = len(src) - start
+		t.Fatal("remoteHookDrainAck has no closing brace at column 0")
 	}
 	body := src[start : start+end]
 
