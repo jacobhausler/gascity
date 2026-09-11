@@ -32,7 +32,7 @@ func TestSessionAssignmentLivenessProbeOnlyNarrowsAndFailsClosed(t *testing.T) {
 		{
 			"bead live, no probe", true,
 			nil, true,
-			"a nil probe must be exactly today's behaviour",
+			"a nil probe must be exactly today's behavior",
 		},
 		{
 			"bead live, runtime confirms absent", true,

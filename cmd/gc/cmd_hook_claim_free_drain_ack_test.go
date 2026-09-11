@@ -72,7 +72,7 @@ func TestRemoteDrainAckNeverEntersTheClaimProtocol(t *testing.T) {
 }
 
 // readSourceFile reads a file from this package's own directory so a test can
-// pin a structural property of the source rather than only its behaviour.
+// pin a structural property of the source rather than only its behavior.
 func readSourceFile(t *testing.T, name string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(".", name))

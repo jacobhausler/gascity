@@ -2558,7 +2558,7 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 	// Second liveness source for runtime-backed seats (cr-5udnb3). The bead
 	// answer alone cannot see a box that died: in a Nomad alloc the session bead
 	// and the runtime are two things on two machines, so a SIGKILLed allocation
-	// leaves the bead open, labelled and "live" while the seat is a corpse, and
+	// leaves the bead open, labeled and "live" while the seat is a corpse, and
 	// the claim is never released. Measured T5, 2026-09-11.
 	//
 	// Built here because this is where the provider is reachable. It FAILS

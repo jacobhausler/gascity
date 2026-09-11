@@ -850,7 +850,7 @@ type runtimeAbsenceProbe func(assignee string) bool
 // session bead die together — measured working 33 times in six hours on
 // 2026-09-11. It is NOT sound for a seat in a Nomad box: those are two things
 // on two machines, so SIGKILLing the allocation leaves the session bead open,
-// labelled and "live" while the box is a corpse. Measured the same day (T5,
+// labeled and "live" while the box is a corpse. Measured the same day (T5,
 // cr-5udnb3): alloc killed at 19:15:20Z, Nomad reporting ClientStatus=failed
 // twenty seconds later, and the bead still in_progress and still assigned four
 // minutes on. The predicate answered TRUE about a corpse and the claim was
@@ -858,13 +858,13 @@ type runtimeAbsenceProbe func(assignee string) bool
 //
 // The probe can only ever turn a LIVE answer into a dead one, never the
 // reverse, and only on a confirmed absence. A nil probe is exactly today's
-// behaviour.
+// behavior.
 // runtimeAbsent is the orphan-release path's second liveness source. It is a
 // package-level hook rather than a parameter ON PURPOSE: releaseOrphanedPool-
 // Assignments is constructed directly by a dozen tests across eight files, and
 // threading an argument through all of them churns files this change has no
 // business touching. nil - the zero value, and what every test sees - is
-// exactly today's behaviour.
+// exactly today's behavior.
 //
 // Set once by the controller, the only place the session provider is reachable.
 var runtimeAbsent runtimeAbsenceProbe
