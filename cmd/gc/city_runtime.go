@@ -2568,6 +2568,15 @@ func (cr *CityRuntime) beadReconcileTick(ctx context.Context, result DesiredStat
 	// assignee may release. Reading an unreadable provider as "not running"
 	// would release live work fleet-wide on a transient blip - the same argument
 	// the shutdown path makes below about ungraceful mass kills.
+	// Scoped to this tick and restored after it. A package-level hook that is
+	// SET and never cleared leaks across the package's tests: the release suite
+	// runs after any test that drives a controller tick, sees a probe built
+	// against a provider it never configured, and its result becomes
+	// order-dependent. TestReleaseOrphanedPoolAssignments_NilSessionsStoreFalls-
+	// BackToWorkStore caught exactly that — passing alone, failing in the full
+	// package run. A hook is only safe if its lifetime is bounded by the thing
+	// that owns it.
+	defer func(prev runtimeAbsenceProbe) { runtimeAbsent = prev }(runtimeAbsent)
 	runtimeAbsent = func(assignee string) bool {
 		assignee = strings.TrimSpace(assignee)
 		if assignee == "" || cr.sp == nil {
