@@ -28,17 +28,25 @@ func TestNoWakeReasonSeatFreesItsPoolSlot(t *testing.T) {
 		want   bool
 		why    string
 	}{
-		{string(sessionpkg.SleepReasonNoWakeReason), true,
-			"gc slept it because there was no work to wake for; that is an idle seat and its slot must recycle"},
+		{
+			string(sessionpkg.SleepReasonNoWakeReason), true,
+			"gc slept it because there was no work to wake for; that is an idle seat and its slot must recycle",
+		},
 		{string(sessionpkg.SleepReasonIdle), true, "unchanged: idle already freed its slot"},
 		{string(sessionpkg.SleepReasonIdleTimeout), true, "unchanged"},
 		{string(sessionpkg.SleepReasonDrained), true, "unchanged: a drained seat is freeable"},
-		{"", false,
-			"deny-by-default survives: an asleep seat with NO reason may be a legacy bead or a write race"},
-		{"some-reason-nobody-has-defined", false,
-			"deny-by-default survives for genuinely unknown reasons"},
-		{string(sessionpkg.SleepReasonUserHold), false,
-			"a user hold is deliberate but NOT disposable — someone parked this seat on purpose"},
+		{
+			"", false,
+			"deny-by-default survives: an asleep seat with NO reason may be a legacy bead or a write race",
+		},
+		{
+			"some-reason-nobody-has-defined", false,
+			"deny-by-default survives for genuinely unknown reasons",
+		},
+		{
+			string(sessionpkg.SleepReasonUserHold), false,
+			"a user hold is deliberate but NOT disposable — someone parked this seat on purpose",
+		},
 	} {
 		t.Run(tc.reason, func(t *testing.T) {
 			info := sessionpkg.Info{MetadataState: "asleep", SleepReason: tc.reason}
