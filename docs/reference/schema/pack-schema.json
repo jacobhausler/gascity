@@ -1207,6 +1207,16 @@
           "type": "object",
           "description": "Env sets additional environment variables for the provider process."
         },
+        "runtime_env": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "type": "object",
+          "description": "RuntimeEnv sets environment that applies only when this provider's\nsession runs on a particular RUNTIME ([runtime_env.\u003cselection name\u003e]).\n\nIt exists because some provider facts are genuinely different depending on\nwhere the agent runs, and neither plain Env nor a city-level runtime env\ncan express that (cr-8eagyh). The measured case: this estate's qwen\nprovider reaches its model through a host gateway on the orchestrator, but\na session inside a Nomad allocation cannot use that gateway and must be\npointed at the direct LAN endpoint. Same provider, same model, different\naddress — a fact about the provider, not about the city, so it belongs\nhere rather than in [session.runtime_env], which would force one model on\nevery lane sharing that runtime.\n\nMerged over Env for the matching runtime; a non-matching runtime ignores\nit entirely."
+        },
         "path_check": {
           "type": "string",
           "description": "PathCheck overrides the binary name used for PATH detection.\nWhen set, lookupProvider and detectProviderName use this instead\nof Command for exec.LookPath checks. Useful when Command is a\nshell wrapper (e.g. sh -c '...') but we need to verify the real\nbinary is installed."

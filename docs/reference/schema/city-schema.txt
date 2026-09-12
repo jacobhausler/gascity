@@ -2496,6 +2496,16 @@
           "type": "object",
           "description": "Env sets additional environment variables for the provider process."
         },
+        "runtime_env": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "type": "object",
+          "description": "RuntimeEnv sets environment that applies only when this provider's\nsession runs on a particular RUNTIME ([runtime_env.\u003cselection name\u003e]).\n\nIt exists because some provider facts are genuinely different depending on\nwhere the agent runs, and neither plain Env nor a city-level runtime env\ncan express that (cr-8eagyh). The measured case: this estate's qwen\nprovider reaches its model through a host gateway on the orchestrator, but\na session inside a Nomad allocation cannot use that gateway and must be\npointed at the direct LAN endpoint. Same provider, same model, different\naddress — a fact about the provider, not about the city, so it belongs\nhere rather than in [session.runtime_env], which would force one model on\nevery lane sharing that runtime.\n\nMerged over Env for the matching runtime; a non-matching runtime ignores\nit entirely."
+        },
         "path_check": {
           "type": "string",
           "description": "PathCheck overrides the binary name used for PATH detection.\nWhen set, lookupProvider and detectProviderName use this instead\nof Command for exec.LookPath checks. Useful when Command is a\nshell wrapper (e.g. sh -c '...') but we need to verify the real\nbinary is installed."
@@ -2841,6 +2851,16 @@
         "k8s": {
           "$ref": "#/$defs/K8sConfig",
           "description": "K8s holds Kubernetes-specific settings for the native K8s provider."
+        },
+        "runtime_env": {
+          "additionalProperties": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "type": "object",
+          "description": "RuntimeEnv maps a runtime selection name ([runtimes.\u003cname\u003e], e.g. \"nomad\")\nto environment merged into every session whose RESOLVED runtime is that\nname. Local sessions are untouched.\n\nIt exists because some environment is a property of WHERE a session runs,\nnot of what the agent is (cr-8eagyh). The clearest case is how to reach the\ncity: a local seat uses a unix socket and needs nothing, while a session in\na Nomad allocation needs GC_CITY_URL/GC_CITY_NAME to reach it over the\nwire. Before this existed there was nowhere to say that once — workspace\nenv applies to every lane, so putting GC_CITY_URL there would push local\nseats onto the remote path — and the only remaining home was a per-lane\nWRAPPER provider that restated the same keys for each lane onboarded to\nthat runtime. Getting that wrong produced no error at all, just a box with\nno agent in it.\n\nPrecedence is deliberately LOW: it merges after workspace env and BEFORE\nprovider, agent and patch env, so a provider that sets the same key still\nwins. That keeps existing wrapper providers working unchanged while they\nare retired one at a time."
         },
         "acp": {
           "$ref": "#/$defs/ACPSessionConfig",

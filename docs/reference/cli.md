@@ -822,6 +822,8 @@ gc context add <name> [flags]
 |------|------|---------|-------------|
 | `--ca-file` | string |  | PEM CA bundle to verify the server certificate |
 | `--city` | string |  | remote city name (default: &lt;name&gt;) |
+| `--client-cert-file` | string |  | PEM client certificate to present (mTLS); requires --client-key-file |
+| `--client-key-file` | string |  | PEM private key for --client-cert-file |
 | `--credential-audience` | string |  | credential provider audience (provider mode) |
 | `--credential-command` | string |  | command that mints a transport bearer (edge/proxy fronted) |
 | `--credential-org` | string |  | optional credential provider organization (provider mode) |
@@ -1959,7 +1961,7 @@ gc hook [agent] [flags]
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
 | `--claim` | bool |  | atomically claim one routed work item for the current session |
-| `--drain-ack` | bool |  | with --claim, acknowledge runtime drain when no work is available |
+| `--drain-ack` | bool |  | acknowledge runtime drain: with --claim, only when no work is available; alone against a remote city, unconditionally and without claiming |
 | `--inject` | bool |  | silent legacy Stop-hook compatibility; skip work query and exit 0 |
 | `--json` | bool |  | emit a JSON protocol result (always with --claim; on the discovery door only for a drain refusal) |
 
@@ -1973,16 +1975,16 @@ gc hook [agent] [flags]
 Prints the work bead this session most recently claimed with gc hook --claim.
 
 The claim protocol stamps the claimed bead id onto the calling session's own
-bead, because the environment alone cannot reliably name it: $GC_BEAD_ID exists
-only in the controller's dispatch condition environment, never in a session
-shell, and $GC_TRIGGER_BEAD_ID — exported to demand-spawned pool seats as a
-pool-level spawn marker — is absent on other seats (e.g. a warm seat bound
-after start) and never decides what a session claims; the pool is pull. It
-appears in the chain below only as a name fallback for work already claimed:
-for a vapor wisp the trigger IS the work bead. A formula step that must close
-the bead it is running reads the stamp back here:
+bead, because a pool session's shell receives no bead id of its own: $GC_BEAD_ID
+exists only in the controller's dispatch condition environment, and the demand
+trigger is exported presence-only as $GC_SPAWN_ORIGIN=demand, never as an id. A
+formula step that must close the bead it is running reads it back here:
 
-    BEAD_ID="$&#123;GC_BEAD_ID:-$&#123;GC_TRIGGER_BEAD_ID:-$(gc hook current --id-only)&#125;&#125;"
+    BEAD_ID="$&#123;GC_BEAD_ID:-$(gc hook current --id-only)&#125;"
+
+Put this command ahead of any controller-supplied hint in such a chain. A hint
+describes why a seat was started; only the claim says what it is running, and a
+chain that prefers the hint closes whatever the controller last counted.
 
 The calling session is taken from $GC_SESSION_ID. Exits 1 when there is no
 session identity and when the session has claimed nothing, so a caller that
