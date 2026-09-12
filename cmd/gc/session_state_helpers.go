@@ -65,10 +65,22 @@ func poolSessionIsLiveInfo(i sessionpkg.Info) bool {
 // failure, so its slot must be reaped — otherwise the dead bead and its worktree
 // leak indefinitely while still excluded from pool capacity.
 //
-// An explicit sleep_reason is required: deny-by-default for unknown or
+// sleep_reason=no-wake-reason is freeable, and it is the one that mattered most
+// in practice (cr-4phwb1 / T2). The reconciler writes it when a seat has nothing
+// to wake for, which is idle by another name — gc's own
+// session.IsDeliberateSleepReason already lists it beside idle, idle-timeout and
+// drained, and this list is otherwise a near-subset of that one. Leaving it out
+// meant a pool could put every seat to sleep for want of work and then hold all
+// of its own slots: measured 2026-09-12 on the worker-local nomad lane, five
+// seats asleep on no-wake-reason while a P0 routed to that very lane sat
+// unclaimed for 12+ minutes, because the pool had no free slot to start a seat
+// that could take it. A lane asleep on top of its own queue.
+//
+// An explicit sleep_reason is still required: deny-by-default for unknown or
 // missing reasons so writes that land in state=asleep without a known
 // reason (legacy beads, regressions, write races) cannot silently free
-// their slot.
+// their slot. Deliberate-but-not-disposable reasons (user-hold, wait-hold)
+// stay OUT: someone parked those seats on purpose.
 func isPoolSessionSlotFreeable(session beads.Bead) bool {
 	if isDrainedSessionBead(session) {
 		return true
@@ -79,6 +91,7 @@ func isPoolSessionSlotFreeable(session beads.Bead) bool {
 	reason := strings.TrimSpace(session.Metadata["sleep_reason"])
 	switch reason {
 	case string(sessionpkg.SleepReasonIdle), string(sessionpkg.SleepReasonIdleTimeout),
+		string(sessionpkg.SleepReasonNoWakeReason),
 		string(sessionpkg.SleepReasonCityStop), string(sessionpkg.SleepReasonFailedCreate),
 		string(sessionpkg.SleepReasonRuntimeMissing), string(sessionpkg.SleepReasonProviderTerminalError),
 		string(sessionpkg.SleepReasonMaxSessionAge):
@@ -98,6 +111,7 @@ func isPoolSessionSlotFreeableInfo(i sessionpkg.Info) bool {
 	reason := strings.TrimSpace(i.SleepReason)
 	switch reason {
 	case string(sessionpkg.SleepReasonIdle), string(sessionpkg.SleepReasonIdleTimeout),
+		string(sessionpkg.SleepReasonNoWakeReason),
 		string(sessionpkg.SleepReasonCityStop), string(sessionpkg.SleepReasonFailedCreate),
 		string(sessionpkg.SleepReasonRuntimeMissing), string(sessionpkg.SleepReasonProviderTerminalError),
 		string(sessionpkg.SleepReasonMaxSessionAge):
