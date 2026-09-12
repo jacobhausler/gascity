@@ -26,6 +26,44 @@ func RuntimeProviderEnv(provider *ResolvedProvider, runtimeProvider string) map[
 	return env
 }
 
+// ApplyRuntimeProviderShape imposes the facts the RUNTIME owns onto a resolved
+// provider, so a lane can be moved between runtimes by naming the runtime and
+// nothing else.
+//
+// Runtime and provider are independent concepts: a provider says WHAT the agent
+// is (which binary, which model endpoint, what its ready prompt looks like); a
+// runtime says WHERE it runs. Three resolved fields are not provider facts at
+// all once the session runs in a Nomad allocation:
+//
+//	Args           argv never reaches the agent — the box launches gc's own
+//	               rendered command, so orchestrator-shaped flags are dead weight
+//	               that only make the config lie about what runs
+//	SupportsHooks  gc's hooks are not installed inside the box
+//	PromptMode     priming cannot ride argv here; the prompt arrives over tmux
+//
+// Before this existed, every lane onboarded to Nomad needed a hand-written
+// WRAPPER provider restating those three as if they were properties of the
+// agent — and getting them wrong produced no error at all: a live box, a live
+// tmux server, a pane holding a bare shell, and a lane that claimed nothing
+// (cr-8eagyh, measured 2026-09-12 onboarding the verifier lane). The wrapper was
+// load-bearing config that no one could see was load-bearing.
+//
+// This is the same boundary RuntimeProviderEnv already polices for CODEX_HOME —
+// the runtime rewriting a field it owns — widened to the rest of the shape.
+// ReadyPromptPrefix and Env are deliberately untouched: those ARE provider facts
+// and hold in both runtimes.
+//
+// Mutates in place and is safe to call more than once; a non-Nomad runtime is a
+// no-op, so a lane moved back to local recovers its provider's own argv.
+func ApplyRuntimeProviderShape(provider *ResolvedProvider, runtimeProvider string) {
+	if provider == nil || strings.TrimSpace(runtimeProvider) != NomadRuntimeProvider {
+		return
+	}
+	provider.Args = nil
+	provider.SupportsHooks = false
+	provider.PromptMode = "none"
+}
+
 // RuntimeProviderSource names where a resolved runtime selection came from.
 type RuntimeProviderSource string
 

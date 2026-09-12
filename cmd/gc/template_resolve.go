@@ -480,6 +480,11 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 		workspaceEnv = p.workspace.Env
 	}
 	runtimeProvider := laneRuntimeProviderForAgent(p.city, p.rigs, cfgAgent)
+	// The runtime owns argv, hook support and prompt delivery — not the
+	// provider. Imposing them here is what lets a lane move to Nomad by naming
+	// its runtime alone, instead of hand-copying a wrapper provider that
+	// restates them (cr-8eagyh).
+	config.ApplyRuntimeProviderShape(resolved, runtimeProvider)
 	providerEnv := config.RuntimeProviderEnv(resolved, runtimeProvider)
 	env := mergeEnv(passthroughEnv(), expandEnvMap(workspaceEnv), expandEnvMap(providerEnv), expandEnvMap(cfgAgent.Env), agentEnv)
 	processenv.PrependGCBinDirToPATH(env, env["GC_BIN"])
