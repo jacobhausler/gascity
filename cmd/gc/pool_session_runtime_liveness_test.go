@@ -101,11 +101,11 @@ func TestConfirmedRuntimeAbsenceBreaksTheOrphanedSeatDeadlock(t *testing.T) {
 	}{
 		{
 			"freeable state, no probe", true, false, nil, true,
-			"today's behaviour must be unchanged when no probe is installed",
+			"today's behavior must be unchanged when no probe is installed",
 		},
 		{
 			"unfreeable state, no probe", false, false, nil, false,
-			"an unrecognised state with NO evidence stays denied — deny-by-default is deliberate",
+			"an unrecognized state with NO evidence stays denied — deny-by-default is deliberate",
 		},
 		{
 			"orphaned state, runtime confirms gone", false, false,
@@ -115,7 +115,7 @@ func TestConfirmedRuntimeAbsenceBreaksTheOrphanedSeatDeadlock(t *testing.T) {
 		{
 			"unfreeable state, runtime uncertain", false, false,
 			func(string) bool { return false }, false,
-			"an unreadable or still-present runtime must NOT authorise touching an unknown state",
+			"an unreadable or still-present runtime must NOT authorize touching an unknown state",
 		},
 		{
 			"freeable state, runtime uncertain", true, false,
@@ -137,7 +137,7 @@ func TestConfirmedRuntimeAbsenceBreaksTheOrphanedSeatDeadlock(t *testing.T) {
 		{
 			"drain-acked asleep seat stays freeable while dormant", true, true,
 			func(string) bool { return true }, true,
-			"a recognised freeable sleep_reason still frees its slot; dormancy only withholds the EXTRA authority",
+			"a recognized freeable sleep_reason still frees its slot; dormancy only withholds the EXTRA authority",
 		},
 	}
 
@@ -145,7 +145,7 @@ func TestConfirmedRuntimeAbsenceBreaksTheOrphanedSeatDeadlock(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := poolSlotRepairAuthorised(tc.freeableState, tc.dormant, seat, tc.probe)
 			if got != tc.wantRepair {
-				t.Fatalf("repair authorised = %v, want %v — %s", got, tc.wantRepair, tc.why)
+				t.Fatalf("repair authorized = %v, want %v — %s", got, tc.wantRepair, tc.why)
 			}
 		})
 	}

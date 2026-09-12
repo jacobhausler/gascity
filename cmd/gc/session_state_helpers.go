@@ -136,7 +136,7 @@ func isPoolSessionSlotFreeableInfo(i sessionpkg.Info) bool {
 // know — a sleep-capable worker is absent from the runtime precisely because it
 // is asleep, and reaping it on that basis retires healthy, resumable seats
 // (proven by the scale-check dormancy retention tests). For a seat making no
-// such claim — orphaned, or any unrecognised non-dormant state — the box SHOULD
+// such claim — orphaned, or any unrecognized non-dormant state — the box SHOULD
 // be up, so a runtime that positively reports it gone is an answer, and a
 // stronger one than any inferred sleep reason.
 //

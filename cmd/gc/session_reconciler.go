@@ -3967,7 +3967,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		// of minting a fresh canonical owner.
 		hasAssignedWork := false
 		poolManagedDead := !shouldWake && !target.alive && isPoolManagedSessionInfo(info)
-		// A state we do not recognise is not the same as a state we have
+		// A state we do not recognize is not the same as a state we have
 		// EVIDENCE about. isPoolSessionSlotFreeableInfo denies by default
 		// because an unknown sleep_reason might mean the seat is alive — but for
 		// a seat that is NOT claiming dormancy, a runtime that positively
@@ -4005,7 +4005,7 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 		//
 		// The assigned-work read now runs for every dead pool seat. The REPAIR
 		// below stays gated on poolFreeable — acting on a state we do not
-		// recognise is how a seat gets killed under live work, and
+		// recognize is how a seat gets killed under live work, and
 		// isPoolSessionSlotFreeableInfo's deny-by-default is deliberate
 		// (session_state_helpers.go). Reporting it is not dangerous; only
 		// repairing it is.
@@ -4046,8 +4046,8 @@ func reconcileSessionBeadsTracedWithNamedDemand(
 			// named-session retirement uses.
 			// poolFreeable, not poolManagedDead: the DIAGNOSTIC above now fires
 			// for every dead pool seat, but the repair still only acts on a state
-			// this code recognises. Unassigning work and closing a session bead
-			// on an unrecognised state is how a seat gets killed under live work,
+			// this code recognizes. Unassigning work and closing a session bead
+			// on an unrecognized state is how a seat gets killed under live work,
 			// and isPoolSessionSlotFreeableInfo's deny-by-default exists for
 			// exactly that (session_state_helpers.go). A stuck seat we do not
 			// understand gets reported loudly and touched not at all.
