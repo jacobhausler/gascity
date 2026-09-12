@@ -171,6 +171,33 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	if err != nil {
 		return TemplateParams{}, fmt.Errorf("agent %q: %w", qualifiedName, err)
 	}
+	// The runtime owns argv, hook support and prompt delivery — not the
+	// provider. Imposing them lets a lane move to Nomad by naming its runtime
+	// alone, instead of hand-copying a wrapper provider that restates them
+	// (cr-8eagyh).
+	//
+	// HERE, NOT LATER, AND THE ORDERING IS THE WHOLE FIX. This ran in Step 10,
+	// ~280 lines below — after Step 5 had already composed the launch command
+	// with `command = resolved.CommandString()`, which folds resolved.Args into
+	// a plain string. ApplyRuntimeProviderShape nils resolved.Args for the
+	// nomad runtime; nilling a field whose value has already been copied into a
+	// string cannot change the string. So the shape was a no-op for the one
+	// thing that reaches the box: argv.
+	//
+	// Measured cost, 2026-09-12: a provider whose args_append begins with
+	// "exec" gave every Nomad box `codex exec` with no prompt — one-shot mode
+	// with nothing to run — and the agent exited 1 in the same second it
+	// started, for days, with the box's own captured output reading "No prompt
+	// provided. Either specify one as an argument or pipe the prompt into
+	// stdin." The lane was dark and gate 3 was not actually finished.
+	//
+	// It also fixes the ACP transport at Step 5's other branch
+	// (ACPCommandString), which had the same staleness and was never noticed.
+	// A provider with explicit acp_args is still untouched, because the shape
+	// only nils Args — a real remaining gap, recorded rather than silently
+	// carried.
+	runtimeProvider := laneRuntimeProviderForAgent(p.city, p.rigs, cfgAgent)
+	config.ApplyRuntimeProviderShape(resolved, runtimeProvider)
 	sessionTransport := config.ResolveSessionCreateTransport(cfgAgent.Session, resolved)
 	// Step 2: Validate session vs provider compatibility.
 	switch sessionTransport {
@@ -479,12 +506,10 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	if p.workspace != nil {
 		workspaceEnv = p.workspace.Env
 	}
-	runtimeProvider := laneRuntimeProviderForAgent(p.city, p.rigs, cfgAgent)
-	// The runtime owns argv, hook support and prompt delivery — not the
-	// provider. Imposing them here is what lets a lane move to Nomad by naming
-	// its runtime alone, instead of hand-copying a wrapper provider that
-	// restates them (cr-8eagyh).
-	config.ApplyRuntimeProviderShape(resolved, runtimeProvider)
+	// runtimeProvider and the shape are applied in Step 1, BEFORE the launch
+	// command is composed — see the note there for why the ordering is
+	// load-bearing. Only the env derivation stays here, where the other env
+	// layers are merged.
 	providerEnv := config.RuntimeProviderEnv(resolved, runtimeProvider)
 	// Environment that belongs to WHERE the session runs, not to what the agent
 	// is — declared once per runtime under [session.runtime_env.<name>] instead
