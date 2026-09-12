@@ -699,6 +699,7 @@ ProviderPatch modifies an existing provider identified by Name.
 | `accept_startup_dialogs` | boolean |  |  | AcceptStartupDialogs overrides startup dialog acceptance behavior. |
 | `env` | map[string]string |  |  | Env adds or overrides environment variables. |
 | `env_remove` | []string |  |  | EnvRemove lists env var keys to remove. |
+| `runtime_env` | map[string]object |  |  | RuntimeEnv adds or overrides per-runtime environment ([runtime_env.&lt;selection name&gt;]), merged per runtime so a patch can adjust one runtime's box environment without discarding another's. |
 | `_replace` | boolean |  |  | Replace replaces the entire provider block instead of deep-merging. |
 
 ## ProviderSpec

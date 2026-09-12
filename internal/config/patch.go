@@ -269,6 +269,10 @@ type ProviderPatch struct {
 	Env map[string]string `toml:"env,omitempty"`
 	// EnvRemove lists env var keys to remove.
 	EnvRemove []string `toml:"env_remove,omitempty"`
+	// RuntimeEnv adds or overrides per-runtime environment
+	// ([runtime_env.<selection name>]), merged per runtime so a patch can adjust
+	// one runtime's box environment without discarding another's.
+	RuntimeEnv map[string]map[string]string `toml:"runtime_env,omitempty"`
 	// Replace replaces the entire provider block instead of deep-merging.
 	Replace bool `toml:"_replace,omitempty"`
 }
@@ -862,6 +866,12 @@ func applyProviderPatch(cfg *City, patch *ProviderPatch) error {
 		if patch.AcceptStartupDialogs != nil {
 			newSpec.AcceptStartupDialogs = cloneBoolPtr(patch.AcceptStartupDialogs)
 		}
+		if len(patch.RuntimeEnv) > 0 {
+			newSpec.RuntimeEnv = make(map[string]map[string]string, len(patch.RuntimeEnv))
+			for runtimeName, env := range patch.RuntimeEnv {
+				newSpec.RuntimeEnv[runtimeName] = cloneStringMap(env)
+			}
+		}
 		if len(patch.Env) > 0 {
 			newSpec.Env = make(map[string]string, len(patch.Env))
 			for k, v := range patch.Env {
@@ -915,6 +925,23 @@ func applyProviderPatch(cfg *City, patch *ProviderPatch) error {
 		}
 		for k, v := range patch.Env {
 			spec.Env[k] = v
+		}
+	}
+	// RuntimeEnv: additive merge PER RUNTIME, so patching one runtime's box
+	// environment never discards another's.
+	if len(patch.RuntimeEnv) > 0 {
+		if spec.RuntimeEnv == nil {
+			spec.RuntimeEnv = make(map[string]map[string]string, len(patch.RuntimeEnv))
+		}
+		for runtimeName, env := range patch.RuntimeEnv {
+			existing, ok := spec.RuntimeEnv[runtimeName]
+			if !ok {
+				existing = make(map[string]string, len(env))
+				spec.RuntimeEnv[runtimeName] = existing
+			}
+			for k, v := range env {
+				existing[k] = v
+			}
 		}
 	}
 	for _, k := range patch.EnvRemove {

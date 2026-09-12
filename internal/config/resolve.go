@@ -372,6 +372,29 @@ func MergeProviderOverBuiltin(base, city ProviderSpec) ProviderSpec {
 		result.Env = merged
 	}
 
+	// RuntimeEnv: merge additively per runtime selection, so a city provider can
+	// add or override the box environment for one runtime without discarding what
+	// the base declared for another. Caught by
+	// TestMergeProviderOverBuiltinFieldSync, which exists precisely because a
+	// field added to ProviderSpec and forgotten here would silently stop
+	// inheriting.
+	if city.RuntimeEnv != nil {
+		merged := make(map[string]map[string]string, len(base.RuntimeEnv)+len(city.RuntimeEnv))
+		for runtimeName, env := range base.RuntimeEnv {
+			merged[runtimeName] = cloneStringMap(env)
+		}
+		for runtimeName, env := range city.RuntimeEnv {
+			if existing, ok := merged[runtimeName]; ok {
+				for k, v := range env {
+					existing[k] = v
+				}
+				continue
+			}
+			merged[runtimeName] = cloneStringMap(env)
+		}
+		result.RuntimeEnv = merged
+	}
+
 	// OptionDefaults: merge additively (city keys win), same as Env and PermissionModes.
 	if city.OptionDefaults != nil {
 		merged := make(map[string]string, len(base.OptionDefaults)+len(city.OptionDefaults))

@@ -2191,6 +2191,7 @@ func TestMergeProviderOverBuiltinFieldSync(t *testing.T) {
 	basePtr := "builtin:custom"
 	city := ProviderSpec{
 		Base:                   &basePtr,
+		RuntimeEnv:             map[string]map[string]string{"nomad": {"GC_CODEX_MODEL_PROVIDER_BASE_URL": "http://box:18030/v1"}},
 		ArgsAppend:             []string{"--extra"},
 		OptionsSchemaMerge:     "by_key",
 		DisplayName:            "Custom",
