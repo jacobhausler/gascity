@@ -62,6 +62,18 @@ func ApplyRuntimeProviderShape(provider *ResolvedProvider, runtimeProvider strin
 	provider.Args = nil
 	provider.SupportsHooks = false
 	provider.PromptMode = "none"
+
+	// Provider facts that differ by WHERE the agent runs — the model endpoint a
+	// box must use instead of a host gateway, say. Merged over Env so the
+	// provider's own declaration wins for this runtime only.
+	if declared := provider.RuntimeEnv[NomadRuntimeProvider]; len(declared) > 0 {
+		if provider.Env == nil {
+			provider.Env = make(map[string]string, len(declared))
+		}
+		for k, v := range declared {
+			provider.Env[k] = v
+		}
+	}
 }
 
 // RuntimeSelectionEnv returns the environment declared for a runtime selection

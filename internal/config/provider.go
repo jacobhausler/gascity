@@ -89,6 +89,22 @@ type ProviderSpec struct {
 	AcceptStartupDialogs *bool `toml:"accept_startup_dialogs,omitempty"`
 	// Env sets additional environment variables for the provider process.
 	Env map[string]string `toml:"env,omitempty"`
+	// RuntimeEnv sets environment that applies only when this provider's
+	// session runs on a particular RUNTIME ([runtime_env.<selection name>]).
+	//
+	// It exists because some provider facts are genuinely different depending on
+	// where the agent runs, and neither plain Env nor a city-level runtime env
+	// can express that (cr-8eagyh). The measured case: this estate's qwen
+	// provider reaches its model through a host gateway on the orchestrator, but
+	// a session inside a Nomad allocation cannot use that gateway and must be
+	// pointed at the direct LAN endpoint. Same provider, same model, different
+	// address — a fact about the provider, not about the city, so it belongs
+	// here rather than in [session.runtime_env], which would force one model on
+	// every lane sharing that runtime.
+	//
+	// Merged over Env for the matching runtime; a non-matching runtime ignores
+	// it entirely.
+	RuntimeEnv map[string]map[string]string `toml:"runtime_env,omitempty"`
 	// PathCheck overrides the binary name used for PATH detection.
 	// When set, lookupProvider and detectProviderName use this instead
 	// of Command for exec.LookPath checks. Useful when Command is a
@@ -224,21 +240,25 @@ type ResolvedProvider struct {
 	EmitsPermissionWarning bool
 	AcceptStartupDialogs   *bool
 	Env                    map[string]string
-	SupportsACP            bool
-	SupportsHooks          bool
-	InstructionsFile       string
-	ResumeFlag             string
-	ResumeStyle            string
-	ResumeCommand          string
-	SessionIDFlag          string
-	ForkFlag               string
-	PermissionModes        map[string]string
-	OptionsSchema          []ProviderOption
-	UpstreamEnv            UpstreamEnvBinding
-	PrintArgs              []string
-	TitleModel             string
-	ACPCommand             string
-	ACPArgs                []string
+	// RuntimeEnv carries the per-runtime provider env declared under
+	// [providers.<name>.runtime_env.<runtime>]; applied by
+	// ApplyRuntimeProviderShape for the session's resolved runtime.
+	RuntimeEnv       map[string]map[string]string
+	SupportsACP      bool
+	SupportsHooks    bool
+	InstructionsFile string
+	ResumeFlag       string
+	ResumeStyle      string
+	ResumeCommand    string
+	SessionIDFlag    string
+	ForkFlag         string
+	PermissionModes  map[string]string
+	OptionsSchema    []ProviderOption
+	UpstreamEnv      UpstreamEnvBinding
+	PrintArgs        []string
+	TitleModel       string
+	ACPCommand       string
+	ACPArgs          []string
 	// EffectiveDefaults is the fully-merged option default map.
 	// Computed from: schema Default -> provider OptionDefaults -> agent OptionDefaults.
 	// Used by ResolveDefaultArgs() to produce CLI flags and by the API to

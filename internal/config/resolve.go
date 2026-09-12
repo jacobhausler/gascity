@@ -691,6 +691,12 @@ func specToResolved(name string, spec *ProviderSpec) *ResolvedProvider {
 		rp.ProcessNames = make([]string, len(spec.ProcessNames))
 		copy(rp.ProcessNames, spec.ProcessNames)
 	}
+	if len(spec.RuntimeEnv) > 0 {
+		rp.RuntimeEnv = make(map[string]map[string]string, len(spec.RuntimeEnv))
+		for runtimeName, env := range spec.RuntimeEnv {
+			rp.RuntimeEnv[runtimeName] = cloneStringMap(env)
+		}
+	}
 	if len(spec.Env) > 0 {
 		rp.Env = make(map[string]string, len(spec.Env))
 		for k, v := range spec.Env {

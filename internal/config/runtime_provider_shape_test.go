@@ -43,6 +43,31 @@ func TestApplyRuntimeProviderShape(t *testing.T) {
 		}
 	})
 
+	t.Run("per-runtime provider env is applied for nomad", func(t *testing.T) {
+		p := newProvider()
+		p.RuntimeEnv = map[string]map[string]string{
+			"nomad": {"GC_CODEX_MODEL_PROVIDER_BASE_URL": "http://192.168.0.122:18030/v1"},
+		}
+		ApplyRuntimeProviderShape(p, NomadRuntimeProvider)
+		if p.Env["GC_CODEX_MODEL_PROVIDER_BASE_URL"] != "http://192.168.0.122:18030/v1" {
+			t.Fatalf("box endpoint not applied: %v — a box cannot use the host gateway, so the provider must be able to say what it uses instead", p.Env)
+		}
+		if p.Env["GC_MODEL"] != "qwen38-next" {
+			t.Errorf("plain Env must survive the merge: %v", p.Env)
+		}
+	})
+
+	t.Run("per-runtime provider env is ignored off that runtime", func(t *testing.T) {
+		p := newProvider()
+		p.RuntimeEnv = map[string]map[string]string{
+			"nomad": {"GC_CODEX_MODEL_PROVIDER_BASE_URL": "http://192.168.0.122:18030/v1"},
+		}
+		ApplyRuntimeProviderShape(p, "local")
+		if _, present := p.Env["GC_CODEX_MODEL_PROVIDER_BASE_URL"]; present {
+			t.Fatal("a box-only endpoint leaked onto a local session — that would repoint the host lane at the wrong address")
+		}
+	})
+
 	t.Run("local is untouched", func(t *testing.T) {
 		p := newProvider()
 		ApplyRuntimeProviderShape(p, "local")
