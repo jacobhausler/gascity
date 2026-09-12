@@ -42,9 +42,19 @@ var unshapedLaunchSites = map[string]int{
 	// (AgentRuntimeProviderOverrideValue) and then discard it before composing
 	// the command, so these two are the cheapest conversions available.
 	"session_template_start.go": 0,
-	// resolveWorkerRuntimeProviderWithConfigAndMetadata — the worker
-	// resume/reattach path.
-	"worker_handle.go": 4,
+	// worker_handle.go: THREE remain, and the count is not a to-do list of
+	// three conversions. Two of them (the resolveTransport closure) return a
+	// transport STRING and never compose a launch command, so shaping them
+	// would be wrong — they are correctly unshaped and counted here only
+	// because this guard counts bare calls per file rather than classifying
+	// each one. The third resolves a provider BY NAME with no agent, so there
+	// is no lane whose runtime could be imposed.
+	//
+	// The one that mattered — resolveWorkerRuntimeProviderWithConfigAndMetadata,
+	// the resume/reattach path — is converted: a session RESUMED onto Nomad was
+	// getting its provider's args_append back, the same defect that darkened a
+	// lane for days on the reconciler path.
+	"worker_handle.go": 3,
 
 	// THE API PATHS, and the reason they are here is a correction. The first
 	// version of this ratchet covered only cmd/gc and therefore counted ten

@@ -897,7 +897,14 @@ func resolveWorkerRuntimeProviderWithConfigAndMetadata(cfg *config.City, info se
 	found, foundAgent := resolveAgentIdentity(cfg, info.Template, "")
 	if session.UseAgentTemplateForProviderResolution(sessionKind, metadata, info.Provider, found.Provider, foundAgent) {
 		if foundAgent {
-			if resolved, err := config.ResolveProvider(&found, &cfg.Workspace, cfg.Providers, exec.LookPath); err == nil {
+			// The lane's runtime is imposed HERE, on the resume/reattach path,
+			// because the resolved provider below composes a launch command —
+			// and the runtime owns argv on the nomad runtime. Without it a
+			// session RESUMED onto Nomad gets its provider's args_append back,
+			// which is the defect that darkened a lane for days on the
+			// reconciler path.
+			laneRuntime := config.AgentRuntimeProviderOverrideValue(cfg, &found)
+			if resolved, err := config.ResolveProviderForLaunch(&found, &cfg.Workspace, cfg.Providers, exec.LookPath, laneRuntime); err == nil {
 				return resolved, config.ResolveSessionCreateTransport(found.Session, resolved)
 			}
 		}
