@@ -233,3 +233,31 @@ func LaneScopedRuntimeNames(cfg *City) []string {
 	sort.Strings(names)
 	return names
 }
+
+// ResolveProviderForLaunch resolves a provider AND imposes the runtime's shape,
+// in that order, for any path that is about to compose a launch or resume
+// command.
+//
+// WHY A SEPARATE ENTRY POINT, rather than folding the shape into
+// ResolveProvider: the bare resolve is the provider AS DECLARED, and several
+// surfaces need exactly that — gc doctor's provider-parity check, gc config
+// explain, the dashboard's effective-options view, the MCP catalog's
+// launch-family selection. Shaping those would make a diagnostic lie about the
+// configuration it exists to report. So the split is deliberate: bare resolve
+// for anything that DESCRIBES a provider, this for anything that RUNS one.
+//
+// Applying the shape before the caller can read Args is the whole point. The
+// defect this closes was not a missing call but a LATE one: resolveTemplate
+// called ApplyRuntimeProviderShape ~280 lines after composing the launch
+// command from resolved.Args, so nilling Args could not change the string that
+// had already been built from it. A lane naming runtime_provider="nomad" still
+// shipped its provider's args_append into the box, every box ran `codex exec`
+// with no prompt, and the agent exited 1 in the same second it started.
+func ResolveProviderForLaunch(agent *Agent, workspace *Workspace, providers map[string]ProviderSpec, lookPath func(string) (string, error), runtimeProvider string) (*ResolvedProvider, error) {
+	resolved, err := ResolveProvider(agent, workspace, providers, lookPath)
+	if err != nil {
+		return nil, err
+	}
+	ApplyRuntimeProviderShape(resolved, runtimeProvider)
+	return resolved, nil
+}

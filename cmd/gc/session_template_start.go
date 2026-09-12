@@ -114,7 +114,14 @@ func materializeSessionForTemplateWithOptions(
 			}
 		}
 
-		resolved, err := config.ResolveProvider(spec.Agent, &cfg.Workspace, cfg.Providers, exec.LookPath)
+		// The lane's runtime is resolved HERE, before the provider, because the
+		// shape it imposes has to reach the launch command composed below.
+		// This function already computed it — further down, after
+		// resolvedSessionCommand had built the command from resolved.Args —
+		// which is the same ordering defect that darkened the nomad lane:
+		// nilling Args cannot change a string already built from it.
+		laneRuntime := config.AgentRuntimeProviderOverrideValue(cfg, spec.Agent)
+		resolved, err := config.ResolveProviderForLaunch(spec.Agent, &cfg.Workspace, cfg.Providers, exec.LookPath, laneRuntime)
 		if err != nil {
 			return "", err
 		}
@@ -149,7 +156,6 @@ func materializeSessionForTemplateWithOptions(
 		}
 		// Stamp and route together: the session must reach its own backend from
 		// the create below onward, not from the next reconciler pass.
-		laneRuntime := config.AgentRuntimeProviderOverrideValue(cfg, spec.Agent)
 		stampLaneRuntimeMetadata(extraMeta, laneRuntime)
 		routeLaneRuntime(sp, spec.SessionName, laneRuntime)
 		if family := resolvedProviderFamilyMetadata(resolved); family != "" {
@@ -279,7 +285,9 @@ func materializeSessionForAgentConfig(cityPath string, cfg *config.City, store b
 		return "", fmt.Errorf("agent config unavailable")
 	}
 
-	resolved, err := config.ResolveProvider(agentCfg, &cfg.Workspace, cfg.Providers, exec.LookPath)
+	// Same ordering as above: runtime first, so the shape reaches the command.
+	laneRuntime := config.AgentRuntimeProviderOverrideValue(cfg, agentCfg)
+	resolved, err := config.ResolveProviderForLaunch(agentCfg, &cfg.Workspace, cfg.Providers, exec.LookPath, laneRuntime)
 	if err != nil {
 		return "", err
 	}
@@ -317,7 +325,6 @@ func materializeSessionForAgentConfig(cityPath string, cfg *config.City, store b
 		"session_origin": "manual",
 	}
 	// Stamp and route together (see the named-session path above).
-	laneRuntime := config.AgentRuntimeProviderOverrideValue(cfg, agentCfg)
 	stampLaneRuntimeMetadata(extraMeta, laneRuntime)
 	routeLaneRuntime(sp, explicitName, laneRuntime)
 	if family := resolvedProviderFamilyMetadata(resolved); family != "" {
