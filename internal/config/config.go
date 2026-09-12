@@ -1582,6 +1582,26 @@ type SessionConfig struct {
 	Provider string `toml:"provider,omitempty"`
 	// K8s holds Kubernetes-specific settings for the native K8s provider.
 	K8s K8sConfig `toml:"k8s,omitempty"`
+	// RuntimeEnv maps a runtime selection name ([runtimes.<name>], e.g. "nomad")
+	// to environment merged into every session whose RESOLVED runtime is that
+	// name. Local sessions are untouched.
+	//
+	// It exists because some environment is a property of WHERE a session runs,
+	// not of what the agent is (cr-8eagyh). The clearest case is how to reach the
+	// city: a local seat uses a unix socket and needs nothing, while a session in
+	// a Nomad allocation needs GC_CITY_URL/GC_CITY_NAME to reach it over the
+	// wire. Before this existed there was nowhere to say that once — workspace
+	// env applies to every lane, so putting GC_CITY_URL there would push local
+	// seats onto the remote path — and the only remaining home was a per-lane
+	// WRAPPER provider that restated the same keys for each lane onboarded to
+	// that runtime. Getting that wrong produced no error at all, just a box with
+	// no agent in it.
+	//
+	// Precedence is deliberately LOW: it merges after workspace env and BEFORE
+	// provider, agent and patch env, so a provider that sets the same key still
+	// wins. That keeps existing wrapper providers working unchanged while they
+	// are retired one at a time.
+	RuntimeEnv map[string]map[string]string `toml:"runtime_env,omitempty"`
 	// ACP holds settings for the ACP (Agent Client Protocol) session provider.
 	ACP ACPSessionConfig `toml:"acp,omitempty"`
 	// SetupTimeout is the per-command/script timeout for session setup and

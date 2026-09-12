@@ -64,6 +64,24 @@ func ApplyRuntimeProviderShape(provider *ResolvedProvider, runtimeProvider strin
 	provider.PromptMode = "none"
 }
 
+// RuntimeSelectionEnv returns the environment declared for a runtime selection
+// under [session.runtime_env.<name>], or nil when none is declared.
+//
+// This is the "where it runs" half of a session's environment (cr-8eagyh). See
+// SessionConfig.RuntimeEnv for why it exists and why its precedence is low. The
+// returned map is always detached from the config.
+func RuntimeSelectionEnv(cfg *City, runtimeProvider string) map[string]string {
+	name := strings.TrimSpace(runtimeProvider)
+	if cfg == nil || name == "" || len(cfg.Session.RuntimeEnv) == 0 {
+		return nil
+	}
+	declared, ok := cfg.Session.RuntimeEnv[name]
+	if !ok || len(declared) == 0 {
+		return nil
+	}
+	return cloneStringMap(declared)
+}
+
 // RuntimeProviderSource names where a resolved runtime selection came from.
 type RuntimeProviderSource string
 

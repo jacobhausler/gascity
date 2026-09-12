@@ -486,7 +486,12 @@ func resolveTemplate(p *agentBuildParams, cfgAgent *config.Agent, qualifiedName 
 	// restates them (cr-8eagyh).
 	config.ApplyRuntimeProviderShape(resolved, runtimeProvider)
 	providerEnv := config.RuntimeProviderEnv(resolved, runtimeProvider)
-	env := mergeEnv(passthroughEnv(), expandEnvMap(workspaceEnv), expandEnvMap(providerEnv), expandEnvMap(cfgAgent.Env), agentEnv)
+	// Environment that belongs to WHERE the session runs, not to what the agent
+	// is — declared once per runtime under [session.runtime_env.<name>] instead
+	// of restated in a wrapper provider per lane (cr-8eagyh). Merged before
+	// provider/agent env so those still win.
+	runtimeEnv := config.RuntimeSelectionEnv(p.city, runtimeProvider)
+	env := mergeEnv(passthroughEnv(), expandEnvMap(workspaceEnv), expandEnvMap(runtimeEnv), expandEnvMap(providerEnv), expandEnvMap(cfgAgent.Env), agentEnv)
 	processenv.PrependGCBinDirToPATH(env, env["GC_BIN"])
 	env = convergence.ScrubTokenEnv(env)
 
