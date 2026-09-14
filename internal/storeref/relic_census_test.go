@@ -21,6 +21,7 @@ import (
 type censusCapabilityStore struct {
 	*beads.MemStore
 	outside   bool
+	censusErr error
 	listCalls int
 }
 
@@ -30,7 +31,7 @@ func (s *censusCapabilityStore) List(q beads.ListQuery) ([]beads.Bead, error) {
 }
 
 func (s *censusCapabilityStore) HasResidentOutside([]string) (bool, error) {
-	return s.outside, nil
+	return s.outside, s.censusErr
 }
 
 // censusStore is a binding store whose List can be made to fail, so the
@@ -211,5 +212,18 @@ func TestHasOpenLegacyResidentsDoesNotListOrDecodeRows(t *testing.T) {
 	}
 	if store.listCalls != 0 {
 		t.Fatalf("the census called List %d times; the capability must avoid row hydration", store.listCalls)
+	}
+}
+
+func TestHasOpenLegacyResidentsKeepsProbeOnCapabilityError(t *testing.T) {
+	store := &censusCapabilityStore{
+		MemStore:  beads.NewMemStore(),
+		censusErr: errors.New("namespace census unavailable"),
+	}
+	if !HasOpenLegacyResidents(censusBinding(store)) {
+		t.Fatal("a failed namespace census retired the legacy probe")
+	}
+	if store.listCalls != 0 {
+		t.Fatalf("the failed capability path fell back to List %d times", store.listCalls)
 	}
 }
