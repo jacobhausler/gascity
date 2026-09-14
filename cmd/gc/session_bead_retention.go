@@ -27,13 +27,13 @@ import (
 const (
 	// defaultSessionBeadDeleteAfterClose is the TTL when config carries none.
 	// Two days is the age the owner authorized (2026-09-14): past that a
-	// session bead is archaeology — the slot it named, any claim it held, and
+	// session bead is archeology — the slot it named, any claim it held, and
 	// any resumable incarnation it protected are long gone.
 	defaultSessionBeadDeleteAfterClose = 48 * time.Hour
 
 	// minSessionBeadDeleteAfterClose clamps a configured TTL. delete_after_close
 	// takes whole-duration strings, so a mistyped "1m" would otherwise turn one
-	// watchdog run into a history wipe; an hour is the shortest this leg honours.
+	// watchdog run into a history wipe; an hour is the shortest this leg honors.
 	minSessionBeadDeleteAfterClose = time.Hour
 
 	// sessionBeadRetentionWatchdogInterval is the minimum time between runs.
