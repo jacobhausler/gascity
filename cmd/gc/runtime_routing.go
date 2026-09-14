@@ -199,13 +199,13 @@ func stampLaneRuntimeMetadata(meta map[string]string, runtimeProvider string) {
 	meta[session.RuntimeProviderMetadataKey] = runtimeProvider
 }
 
-// routeLaneRuntime registers a session's runtime with a provider that routes by
-// it. Dynamically created sessions reach the router this way, the same way
-// dynamic ACP sessions reach the transport router via RouteACP.
+// routeLaneRuntime registers or clears a session's runtime with a provider that
+// routes by it. Dynamically created sessions reach the router this way, the
+// same way dynamic ACP sessions reach the transport router via RouteACP.
 func routeLaneRuntime(sp runtime.Provider, sessionName, runtimeProvider string) {
 	sessionName = strings.TrimSpace(sessionName)
 	runtimeProvider = strings.TrimSpace(runtimeProvider)
-	if sessionName == "" || runtimeProvider == "" {
+	if sessionName == "" {
 		return
 	}
 	if router, ok := sp.(interface{ RouteRuntime(string, string) }); ok {

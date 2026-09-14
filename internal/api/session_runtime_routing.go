@@ -26,12 +26,13 @@ type runtimeRoutingProvider interface {
 // create included, would land on the city default backend, which hosts a
 // different box.
 //
-// No-op when nothing is stamped or when the provider does not route runtimes,
-// so a city that selects no lane-scoped runtime behaves exactly as before.
+// An empty runtime selection clears any stale route for the session. The
+// provider remains unchanged when it does not route runtimes, so a city that
+// selects no lane-scoped runtime still behaves exactly as before.
 func routeSessionRuntime(sp runtime.Provider, sessionName, runtimeProvider string) {
 	sessionName = strings.TrimSpace(sessionName)
 	runtimeProvider = strings.TrimSpace(runtimeProvider)
-	if sessionName == "" || runtimeProvider == "" {
+	if sessionName == "" {
 		return
 	}
 	if router, ok := sp.(runtimeRoutingProvider); ok {
@@ -47,10 +48,7 @@ func routeSessionRuntime(sp runtime.Provider, sessionName, runtimeProvider strin
 // Returns the resolved runtime, "" when the agent selects none.
 func stampAndRouteSessionRuntime(cfg *config.City, a *config.Agent, sp runtime.Provider, sessionName string, meta map[string]string) string {
 	rt := config.AgentRuntimeProviderOverrideValue(cfg, a)
-	if rt == "" {
-		return ""
-	}
-	if meta != nil {
+	if rt != "" && meta != nil {
 		meta[session.RuntimeProviderMetadataKey] = rt
 	}
 	routeSessionRuntime(sp, sessionName, rt)
