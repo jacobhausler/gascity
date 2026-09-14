@@ -26,6 +26,7 @@ import (
 	"github.com/gastownhall/gascity/internal/fsys"
 	"github.com/gastownhall/gascity/internal/graphroute"
 	"github.com/gastownhall/gascity/internal/runtime"
+	sessionrouter "github.com/gastownhall/gascity/internal/runtime/router"
 	sessionpkg "github.com/gastownhall/gascity/internal/session"
 	"github.com/gastownhall/gascity/internal/session/sessiontest"
 	"github.com/gastownhall/gascity/internal/storeref"
@@ -5926,6 +5927,42 @@ func TestCreatePoolSessionBeadWithGuardedAlias_LockSetupFailureNeverCreates(t *t
 	}
 	if strings.Contains(stderr.String(), "creating without alias") {
 		t.Fatalf("stderr = %q, must not advertise an unguarded fallback", stderr.String())
+	}
+}
+
+func TestCreatePoolSessionBeadWithGuardedAliasClearsRemovedLaneRuntime(t *testing.T) {
+	store := beads.NewMemStore()
+	cfg := &config.City{
+		Workspace: config.Workspace{Name: "test-city"},
+		Rigs:      []config.Rig{{Name: "rig", Path: t.TempDir()}},
+		Agents: []config.Agent{{
+			Name:              "worker",
+			Dir:               "rig",
+			StartCommand:      "true",
+			MaxActiveSessions: intPtr(1),
+		}},
+	}
+	def, lane := runtime.NewFake(), runtime.NewFake()
+	sp := sessionrouter.New(def, func(name string) (runtime.Provider, error) {
+		if name != "second" {
+			return nil, fmt.Errorf("unexpected runtime %q", name)
+		}
+		return lane, nil
+	})
+	bp := newAgentBuildParams("test-city", t.TempDir(), cfg, sp, time.Now().UTC(), store, io.Discard)
+	bp.sessionBeads = newSessionBeadSnapshot(nil)
+
+	expectedSessionName := poolRuntimeSessionName(cfg, "worker-1", cfg.Agents[0].QualifiedName(), false)
+	sp.RouteRuntime(expectedSessionName, "second")
+	created, err := createPoolSessionBeadWithGuardedAlias(bp, &cfg.Agents[0], "worker", "worker-1", 1, nil)
+	if err != nil {
+		t.Fatalf("createPoolSessionBeadWithGuardedAlias: %v", err)
+	}
+	if created.SessionNameMetadata != expectedSessionName {
+		t.Fatalf("created session_name = %q, want %q", created.SessionNameMetadata, expectedSessionName)
+	}
+	if _, ok := sp.RuntimeFor(expectedSessionName); ok {
+		t.Fatalf("desired-state create left stale route for %q", expectedSessionName)
 	}
 }
 

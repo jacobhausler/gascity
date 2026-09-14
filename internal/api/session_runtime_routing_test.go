@@ -89,6 +89,34 @@ func TestAPISessionWithoutLaneRuntimeIsNotStampedOrRouted(t *testing.T) {
 	}
 }
 
+func TestAPICreateWithoutLaneRuntimeClearsStaleRoute(t *testing.T) {
+	def, lane := runtime.NewFake(), runtime.NewFake()
+	sp := sessionrouter.New(def, fixedRuntimeFactory(map[string]runtime.Provider{"second": lane}))
+	sp.RouteRuntime("s-worker", "second")
+
+	cfg := &config.City{
+		Rigs:   []config.Rig{{Name: "rig-a"}},
+		Agents: []config.Agent{{Name: "worker", Dir: "rig-a"}},
+	}
+	meta := map[string]string{}
+
+	if rt := stampAndRouteSessionRuntime(cfg, &cfg.Agents[0], sp, "s-worker", meta); rt != "" {
+		t.Fatalf("resolved runtime = %q, want empty", rt)
+	}
+	if _, ok := sp.RuntimeFor("s-worker"); ok {
+		t.Fatal("API create path left a stale runtime route")
+	}
+	if err := sp.Start(context.Background(), "s-worker", runtime.Config{Command: "c"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !def.IsRunning("s-worker") {
+		t.Fatal("re-created API session did not return to the default backend")
+	}
+	if lane.IsRunning("s-worker") {
+		t.Fatal("re-created API session remained on the old lane backend")
+	}
+}
+
 // A provider that does not route runtimes (every city today that sets no
 // lane-scoped runtime) must not be disturbed by the seam.
 func TestRouteSessionRuntimeIgnoresNonRoutingProvider(t *testing.T) {

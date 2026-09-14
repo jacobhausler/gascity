@@ -246,6 +246,32 @@ func TestCreateSiteStampAndRouteRoutesBeforeAnyReconcile(t *testing.T) {
 	}
 }
 
+func TestRouteLaneRuntimeClearsStaleRouteWhenSelectionIsEmpty(t *testing.T) {
+	def, lane := runtime.NewFake(), runtime.NewFake()
+	rp := sessionrouter.New(def, func(name string) (runtime.Provider, error) {
+		if name != "subprocess" {
+			return nil, errors.New("unexpected runtime " + name)
+		}
+		return lane, nil
+	})
+
+	routeLaneRuntime(rp, "s-recreated", "subprocess")
+	routeLaneRuntime(rp, "s-recreated", "")
+
+	if got, ok := rp.RuntimeFor("s-recreated"); ok {
+		t.Fatalf("RuntimeFor(s-recreated) = (%q, true), want no stale route", got)
+	}
+	if err := rp.Start(context.Background(), "s-recreated", runtime.Config{Command: "c"}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !def.IsRunning("s-recreated") {
+		t.Fatal("re-created session did not return to the default backend")
+	}
+	if lane.IsRunning("s-recreated") {
+		t.Fatal("re-created session remained on the old lane backend")
+	}
+}
+
 // The rig-level default must survive a rig override that re-points Dir: the
 // agent still belongs to the rig that declared the override.
 func TestLaneRuntimeProviderForAgentUsesOwningRigNotDir(t *testing.T) {
