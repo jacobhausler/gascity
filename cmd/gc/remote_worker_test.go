@@ -573,6 +573,83 @@ func TestRemoteBdUpdateAcceptsFormulaStepMetadata(t *testing.T) {
 	}
 }
 
+// The work-record keys a box seat must stamp to pass its own gates
+// (cr-gipdz0): gc.output_json, gc.work_verification, gc.receipt. They ride the
+// same update leg as the step triple, because a seat whose box is not the
+// controller's host has no other way to reach the row — and a receipt it cannot
+// write is a receipt that does not exist, so the seat closes outcome=fail no
+// matter what it actually did.
+func TestRemoteBdUpdateAcceptsWorkRecordMetadata(t *testing.T) {
+	srv := newRemoteWorkerServer(t)
+	useRemoteWorkerContext(t, srv)
+	client, _, err := resolveWorkerTarget()
+	if err != nil {
+		t.Fatalf("resolveWorkerTarget: %v", err)
+	}
+
+	var out, errb bytes.Buffer
+	code, handled := remoteBd(client, []string{
+		"update", "cr-1",
+		"--set-metadata", `gc.output_json={"summary":"done"}`,
+		"--set-metadata", "gc.work_verification=go test ./cmd/gc/",
+		"--set-metadata", "gc.receipt=bash ops/tests/remote-step-test.sh",
+	}, &out, &errb)
+	if !handled || code != 0 {
+		t.Fatalf("handled=%v code=%d stderr=%q", handled, code, errb.String())
+	}
+	if !srv.sawPath("POST /v0/city/mc/bead/cr-1/update") {
+		t.Fatalf("update route not called; saw %v", srv.paths)
+	}
+	body := srv.lastUpdate()
+	metadata, ok := body["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata = %#v, want an object", body["metadata"])
+	}
+	want := map[string]string{
+		"gc.output_json":       `{"summary":"done"}`,
+		"gc.work_verification": "go test ./cmd/gc/",
+		"gc.receipt":           "bash ops/tests/remote-step-test.sh",
+	}
+	for key, value := range want {
+		if metadata[key] != value {
+			t.Errorf("metadata[%q] = %#v, want %q", key, metadata[key], value)
+		}
+	}
+}
+
+// Widening the list must not open the route. The routing and ownership keys are
+// control-plane state this leg does not own, and the typed close record belongs
+// to the close verb, which fences it by claimant and revision. A refusal here
+// writes nothing.
+func TestRemoteBdUpdateStillRefusesControlPlaneMetadata(t *testing.T) {
+	srv := newRemoteWorkerServer(t)
+	useRemoteWorkerContext(t, srv)
+	client, _, err := resolveWorkerTarget()
+	if err != nil {
+		t.Fatalf("resolveWorkerTarget: %v", err)
+	}
+	for _, metadata := range []string{
+		"gc.routed_to=mechanic",
+		"gc.session_id=sneaky",
+		"gc.lease_owner=sneaky",
+		"gc.work_outcome=shipped",
+	} {
+		t.Run(metadata, func(t *testing.T) {
+			var out, errb bytes.Buffer
+			code, handled := remoteBd(client, []string{"update", "cr-1", "--set-metadata", metadata}, &out, &errb)
+			if !handled || code == 0 {
+				t.Fatalf("handled=%v code=%d, want a refusal", handled, code)
+			}
+			if !strings.Contains(errb.String(), "not supported against a remote city") {
+				t.Fatalf("stderr = %q", errb.String())
+			}
+		})
+	}
+	if srv.sawPath("POST /v0/city/mc/bead/cr-1/update") {
+		t.Fatal("a refused update must not reach the city")
+	}
+}
+
 func TestRemoteBdUpdateRefusesInvalidFormulaOutcomeBeforeWrite(t *testing.T) {
 	srv := newRemoteWorkerServer(t)
 	useRemoteWorkerContext(t, srv)

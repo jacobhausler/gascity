@@ -554,20 +554,34 @@ func remoteBdUpdate(client *api.Client, id string, flags []string, stdout, stder
 	return 0
 }
 
+// remoteReceiptMetadataKey names the proof-of-work key a worker stamps on the
+// bead it is closing. It is not a beadmeta key: the vocabulary is the
+// operator's, and gc only ever stores and echoes it. It is on the remote allow
+// list because the box seat cannot write the row any other way, and a receipt
+// the seat cannot record is a receipt that does not exist.
+const remoteReceiptMetadataKey = "gc.receipt"
+
 // validateRemoteStepMetadata is deliberately an allowlist. The remote worker
 // update route is a narrow formula-step completion leg, not a general metadata
 // tunnel: accepting arbitrary keys would let a worker write control-plane
-// state that this route does not own. The three step keys below are the full
-// vocabulary used by formula steps at this pin.
+// state that this route does not own. The keys below are the vocabulary a
+// worker legitimately owns — the step-completion triple, and the work-record
+// keys the prestage and typed-close gates read back off the same row the worker
+// is already entitled to write. Control-plane keys (gc.routed_to, gc.session_*,
+// the lease keys) stay refused.
 func validateRemoteStepMetadata(key, value string) error {
 	switch key {
 	case beadmeta.OutcomeMetadataKey:
 		if value != "pass" && value != "fail" {
 			return fmt.Errorf("metadata %q must be pass or fail, got %q", key, value)
 		}
-	case beadmeta.StepIDMetadataKey, beadmeta.StepRefMetadataKey, beadmeta.StepTimeoutMetadataKey:
+	case beadmeta.StepIDMetadataKey, beadmeta.StepRefMetadataKey, beadmeta.StepTimeoutMetadataKey,
+		// A worker reports what it ran and what it produced; both are read from
+		// the bead by the gates that release its work.
+		beadmeta.WorkVerificationMetadataKey, beadmeta.OutputJSONMetadataKey,
+		remoteReceiptMetadataKey:
 	default:
-		return fmt.Errorf("metadata key %q is not supported against a remote city; remote formula-step updates accept only gc.outcome and the existing gc.step_* fields", key)
+		return fmt.Errorf("metadata key %q is not supported against a remote city; remote worker updates accept gc.outcome, the gc.step_* fields, gc.work_verification, gc.output_json and gc.receipt", key)
 	}
 	return nil
 }
