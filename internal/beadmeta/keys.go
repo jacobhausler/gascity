@@ -285,6 +285,16 @@ const (
 	WorkflowExpandedMetadataKey = "gc.workflow_expanded"
 )
 
+// ReceiptMetadataKey is the proof-of-work key a worker stamps on the bead it is
+// closing: the command that proves the close. It belongs to the work-record
+// family (its sibling is WorkVerificationMetadataKey above), so the KEY is
+// engine-declared here and the guard refuses raw literals of it elsewhere;
+// the vocabulary of its VALUE stays the operator's, and gc only ever stores and
+// echoes it. The remote worker update leg allowlists it because a box seat
+// cannot write the row any other way, and a receipt the seat cannot record is a
+// receipt that does not exist.
+const ReceiptMetadataKey = "gc.receipt"
+
 // Work-record metadata keys (ADR-0009). These bind a work bead to its claim
 // and its outcome so observability/eval can answer "what work was done, by
 // whom, with what artifact, to what end":
@@ -517,6 +527,7 @@ var KnownMetadataKeys = []string{
 	PerDispatchModelMetadataKey,
 	RalphStepIDMetadataKey,
 	ReasoningMetadataKey,
+	ReceiptMetadataKey,
 	RequiredArtifactMetadataKey,
 	RequiredArtifactsMetadataKey,
 	ReviewGateMetadataKey,
