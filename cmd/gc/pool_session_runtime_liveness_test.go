@@ -86,8 +86,10 @@ func sessionAssignmentIsLiveForTest(beadLive bool, assignee string, absent runti
 // The break is evidence, not a wider allow-list: a runtime that positively
 // reports the box gone is an ANSWER, and a stronger one than any inferred sleep
 // reason. An unknown state with no runtime evidence stays denied, and a seat
-// claiming state=asleep is excluded outright: it is asserting its box is
-// legitimately gone, so absence is not news about it.
+// claiming state=asleep is excluded outright for a resumable lane: it is
+// asserting its box is legitimately gone, so absence is not news about it.
+// See TestOneShotDormancyDoesNotVetoConfirmedRuntimeAbsence for the one_shot
+// lane, where asleep means the incarnation is over.
 func TestConfirmedRuntimeAbsenceBreaksTheOrphanedSeatDeadlock(t *testing.T) {
 	const seat = "worker-local-1-pool"
 
@@ -143,7 +145,97 @@ func TestConfirmedRuntimeAbsenceBreaksTheOrphanedSeatDeadlock(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := poolSlotRepairAuthorised(tc.freeableState, tc.dormant, seat, tc.probe)
+			got := poolSlotRepairAuthorised(tc.freeableState, tc.dormant, false, seat, tc.probe)
+			if got != tc.wantRepair {
+				t.Fatalf("repair authorized = %v, want %v — %s", got, tc.wantRepair, tc.why)
+			}
+		})
+	}
+}
+
+// TestOneShotDormancyDoesNotVetoConfirmedRuntimeAbsence pins the one_shot lift
+// on the dormancy veto (cr-6v18b7).
+//
+// Measured 2026-09-14 19:19Z on the worker-local one_shot lane (cap 12): 11
+// session beads sat asleep against 3 live boxes while scaleCheck reported 19
+// ready beads, and every supervisor tick logged "pool template worker-local has
+// no free concrete slot (slot stalled on its own runtime name)". Those seats
+// park asleep with an empty or unrecognized sleep_reason, so
+// isPoolSessionSlotFreeableInfo denied them; the dormancy veto then denied the
+// evidence-based authority as well, and the fresh create failed closed on the
+// runtime name a corpse still advertised. `gc session close` on the stalled
+// beads freed the slots inside a minute, which is the proof that the open bead
+// — not the runtime — was holding the name.
+//
+// A one_shot lane has no resumable incarnation to protect, so positive runtime
+// absence is exactly the fact that ends it. The lift is evidence-gated and
+// lane-scoped: no probe, an uncertain probe, or a persistent lane must all keep
+// the veto.
+func TestOneShotDormancyDoesNotVetoConfirmedRuntimeAbsence(t *testing.T) {
+	const seat = "worker-local-1-pool"
+
+	cases := []struct {
+		name          string
+		freeableState bool
+		dormant       bool
+		oneShot       bool
+		probe         runtimeAbsenceProbe
+		wantRepair    bool
+		why           string
+	}{
+		{
+			name:          "one_shot dormant seat, runtime confirms gone",
+			freeableState: false,
+			dormant:       true,
+			oneShot:       true,
+			probe:         func(string) bool { return true },
+			wantRepair:    true,
+			why: "a one_shot asleep seat has no resumable incarnation to protect; " +
+				"positive absence is the fact that ends it and frees the slot",
+		},
+		{
+			name:          "one_shot dormant seat, runtime uncertain",
+			freeableState: false,
+			dormant:       true,
+			oneShot:       true,
+			probe:         func(string) bool { return false },
+			wantRepair:    false,
+			why: "the lift is evidence-gated — an unreadable, partial or still-present " +
+				"runtime must not retire a one_shot seat either",
+		},
+		{
+			name:          "one_shot dormant seat, no probe installed",
+			freeableState: false,
+			dormant:       true,
+			oneShot:       true,
+			probe:         nil,
+			wantRepair:    false,
+			why:           "with no liveness source at all the dormancy veto still stands",
+		},
+		{
+			name:          "persistent dormant seat, runtime absent",
+			freeableState: false,
+			dormant:       true,
+			oneShot:       false,
+			probe:         func(string) bool { return true },
+			wantRepair:    false,
+			why: "the lift is scoped to one_shot — a resumable lane keeps the " +
+				"dormancy retention the scale-check tests already pin",
+		},
+		{
+			name:          "one_shot non-dormant seat keeps the existing evidence path",
+			freeableState: false,
+			dormant:       false,
+			oneShot:       true,
+			probe:         func(string) bool { return true },
+			wantRepair:    true,
+			why:           "one_shot widens nothing that cr-1jicje already authorised",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := poolSlotRepairAuthorised(tc.freeableState, tc.dormant, tc.oneShot, seat, tc.probe)
 			if got != tc.wantRepair {
 				t.Fatalf("repair authorized = %v, want %v — %s", got, tc.wantRepair, tc.why)
 			}

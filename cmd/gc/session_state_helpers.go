@@ -143,11 +143,27 @@ func isPoolSessionSlotFreeableInfo(i sessionpkg.Info) bool {
 // absent is fail-closed: a nil probe, a list error, a partial list or a
 // still-present session all answer "not absent", so an unreadable runtime
 // widens nothing. A freeable state is never vetoed — the probe may only widen.
-func poolSlotRepairAuthorised(freeableState, dormant bool, seat string, absent runtimeAbsenceProbe) bool {
+//
+// oneShot lifts the dormancy veto and nothing else. A one_shot lane has no
+// resumable incarnation to protect: state=asleep there records that a bounded
+// incarnation FINISHED, not that a live conversation is parked and must be
+// rehydrated in place. The veto exists to stop a scale check reaping healthy
+// resumable seats; applied to a one_shot exit it becomes the thing that never
+// frees the slot — nothing closes a one_shot exit bead (reusablePoolSessionInfo
+// says so out loud), the reuse door fails it once the bead carries a claim, and
+// the fresh-create path then fails closed on the runtime name the dead bead
+// still advertises (derivePoolSessionName -> errPoolSessionNameUnavailable).
+// Measured on the worker-local one_shot lane 2026-09-14 19:19Z: 11 seats asleep
+// against 3 live boxes, 19 ready beads, "pool template worker-local has no free
+// concrete slot (slot stalled on its own runtime name)" every tick, until an
+// operator ran gc session close on the stalled beads (cr-6v18b7). The lift
+// still requires the POSITIVE absence probe, so an unreadable or partial
+// runtime retires nothing, and it never touches a persistent lane's seat.
+func poolSlotRepairAuthorised(freeableState, dormant, oneShot bool, seat string, absent runtimeAbsenceProbe) bool {
 	if freeableState {
 		return true
 	}
-	if dormant {
+	if dormant && !oneShot {
 		return false
 	}
 	return absent != nil && absent(seat)
