@@ -18,6 +18,21 @@ import (
 	"github.com/gastownhall/gascity/internal/coordclass"
 )
 
+type censusCapabilityStore struct {
+	*beads.MemStore
+	outside   bool
+	listCalls int
+}
+
+func (s *censusCapabilityStore) List(q beads.ListQuery) ([]beads.Bead, error) {
+	s.listCalls++
+	return s.MemStore.List(q)
+}
+
+func (s *censusCapabilityStore) HasResidentOutside([]string) (bool, error) {
+	return s.outside, nil
+}
+
 // censusStore is a binding store whose List can be made to fail, so the
 // fail-safe direction is testable rather than asserted.
 type censusStore struct {
@@ -184,5 +199,17 @@ func TestCensusReadsOnlyTheBinding(t *testing.T) {
 		Leg:      Leg{Ref: ClassRef([]coordclass.Class{coordclass.ClassGraph}), Store: binding},
 	}) {
 		t.Error("the census reported relics for a clean binding; it must read the binding leg alone")
+	}
+}
+
+// The capability path must answer from the store-level predicate rather than
+// falling back to List, which hydrates every row and decodes bead_json.
+func TestHasOpenLegacyResidentsDoesNotListOrDecodeRows(t *testing.T) {
+	store := &censusCapabilityStore{MemStore: beads.NewMemStore(), outside: true}
+	if !HasOpenLegacyResidents(censusBinding(store)) {
+		t.Fatal("the store-level census answer was ignored")
+	}
+	if store.listCalls != 0 {
+		t.Fatalf("the census called List %d times; the capability must avoid row hydration", store.listCalls)
 	}
 }

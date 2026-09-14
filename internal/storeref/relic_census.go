@@ -70,6 +70,13 @@ func OpenLegacyResidents(store beads.Store, prefixes []string) ([]string, error)
 // refused city, whose store answers every read with the standing storage
 // refusal, takes this branch too.
 func HasOpenLegacyResidents(b ClassBinding) bool {
+	if census, ok := beads.NamespaceCensusFor(b.Leg.Store); ok {
+		has, err := census.HasResidentOutside(b.Prefixes)
+		if err != nil {
+			return true
+		}
+		return has
+	}
 	relics, err := OpenLegacyResidents(b.Leg.Store, b.Prefixes)
 	if err != nil {
 		return true

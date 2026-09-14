@@ -538,6 +538,24 @@ func (s *emittingClassStore) AtomicConditionalCloserHandle() (beads.AtomicCondit
 	return s, true
 }
 
+// HasResidentOutside carries the namespace census method required by the
+// backend capability surface. A wrapper whose backing cannot answer must refuse
+// explicitly; returning a clean verdict would retire a by-ID probe over relics.
+func (s *emittingClassStore) HasResidentOutside(prefixes []string) (bool, error) {
+	census, ok := beads.NamespaceCensusFor(s.Store)
+	if !ok {
+		return false, fmt.Errorf("censusing the id namespaces of the emitting class store over %T: %w", s.Store, beads.ErrNamespaceCensusUnsupported)
+	}
+	return census.HasResidentOutside(prefixes)
+}
+
+// NamespaceCensusHandle keeps discovery honest over this wrapper. The method
+// above is structural so the wrapper retains the SQLite backend's method set,
+// but only the backing store may advertise whether the capability is real.
+func (s *emittingClassStore) NamespaceCensusHandle() (beads.NamespaceCensus, bool) {
+	return beads.NamespaceCensusFor(s.Store)
+}
+
 func (s *emittingClassStore) DeleteIfMatch(id string, revision int64) error {
 	writer, ok := beads.ConditionalWriterFor(s.Store)
 	if !ok {
