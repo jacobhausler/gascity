@@ -229,7 +229,7 @@ func TestOneShotDormancyDoesNotVetoConfirmedRuntimeAbsence(t *testing.T) {
 			oneShot:       true,
 			probe:         func(string) bool { return true },
 			wantRepair:    true,
-			why:           "one_shot widens nothing that cr-1jicje already authorised",
+			why:           "one_shot widens nothing that cr-1jicje already authorized",
 		},
 	}
 
