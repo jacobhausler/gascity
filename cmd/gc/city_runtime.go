@@ -151,8 +151,11 @@ type CityRuntime struct {
 
 	orderSweepWatchdogLast             time.Time
 	orderTrackingRetentionWatchdogLast time.Time
-	nudgeMailSweepWatchdogLast         time.Time
-	wispIndexMigrationApplied          bool
+	// sessionBeadRetentionWatchdogLast gates the closed-session-bead retention
+	// watchdog, the twin of orderTrackingRetentionWatchdogLast (session_bead_retention.go).
+	sessionBeadRetentionWatchdogLast time.Time
+	nudgeMailSweepWatchdogLast       time.Time
+	wispIndexMigrationApplied        bool
 
 	rec events.Recorder
 	cs  *controllerState // nil when controller-managed bead stores are unavailable
@@ -1496,6 +1499,9 @@ func (cr *CityRuntime) dispatchOrders(ctx context.Context, cityRoot string) {
 	cr.rescanOrderDispatcherIfDue(ctx, cityRoot, now)
 	cr.runOrderTrackingSweepWatchdog(now)
 	cr.runOrderTrackingRetentionWatchdog(now)
+	// Closed session beads are 44k rows of dead weight on a busy city and no
+	// other leg deletes one; see session_bead_retention.go (cr-4wdtzw).
+	cr.runSessionBeadRetentionWatchdog(now)
 	cr.runNudgeMailSweepWatchdog(now)
 	if cr.od != nil {
 		cr.od.dispatch(ctx, cityRoot, now)
