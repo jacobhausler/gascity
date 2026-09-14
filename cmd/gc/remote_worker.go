@@ -555,11 +555,13 @@ func remoteBdUpdate(client *api.Client, id string, flags []string, stdout, stder
 }
 
 // remoteReceiptMetadataKey names the proof-of-work key a worker stamps on the
-// bead it is closing. It is not a beadmeta key: the vocabulary is the
-// operator's, and gc only ever stores and echoes it. It is on the remote allow
+// bead it is closing. The key is declared in internal/beadmeta beside its
+// work-record sibling WorkVerificationMetadataKey, so the vocabulary has one
+// home; the vocabulary of its VALUE is the operator's, and gc only ever stores
+// and echoes it. It is on the remote allow
 // list because the box seat cannot write the row any other way, and a receipt
 // the seat cannot record is a receipt that does not exist.
-const remoteReceiptMetadataKey = "gc.receipt"
+const remoteReceiptMetadataKey = beadmeta.ReceiptMetadataKey
 
 // validateRemoteStepMetadata is deliberately an allowlist. The remote worker
 // update route is a narrow formula-step completion leg, not a general metadata
