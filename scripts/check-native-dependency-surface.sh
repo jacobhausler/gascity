@@ -1,7 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-max_modules="${GC_NATIVE_DEP_MAX_MODULES:-727}"
+# 740 re-baselined 2026-09-15 (cr-9faeql lineage landing; owner ruling cr-mfy4q2).
+# Measured on edge/census-on-lineage-20260914 at d954b8115d: `go list -m all |
+# wc -l` = 740 (builders alloc 3125a71e, 2026-09-15T06:58Z), against the old cap
+# of 727. The 13-module growth is inherited from the lineage base, not
+# introduced by the change that surfaced it: 80d72c43f4 ("build(deps): bump beads
+# to schema-v65-capable commit"), the beads schema-v65 dependency the
+# census-on-lineage work requires, pulled github.com/olebedev/when and its dep
+# github.com/AlekSi/pointer into the graph -- `go mod why -m
+# github.com/olebedev/when` walks gascity/internal/beads -> beads ->
+# internal/storage/dolt -> internal/timeparsing -> olebedev/when. Every PR onto
+# this lineage branch failed the same preflight leg until this commit; the
+# change that tripped it (cr-9faeql) touches no go.mod/go.sum. Re-baseline with
+# fresh measurement + growth-rate evidence, not an arbitrary bump, when this
+# next fails.
+max_modules="${GC_NATIVE_DEP_MAX_MODULES:-740}"
 # max_binary_bytes re-baselined 2026-08-29 (ga-iuznq2). The build below now
 # adds -trimpath and CGO_ENABLED=0, which removes cross-host path-embedding
 # and native C-object (dolthub/gozstd, ICU) variance that previously made
