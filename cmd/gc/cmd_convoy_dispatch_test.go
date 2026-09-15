@@ -2182,10 +2182,11 @@ func TestDecorateDynamicFragmentRecipeOneShotPoolFallbackLeavesStepsIndependent(
 		Steps: []formula.RecipeStep{{
 			ID:    "expansion.work",
 			Title: "Work independently",
-			Metadata: map[string]string{
-				beadmeta.ContinuationGroupMetadataKey: "stale-group",
-				beadmeta.SessionAffinityMetadataKey:   "require",
-			},
+			// No continuation group is seeded on purpose: under #6360 a
+			// declared group is propagated rather than dropped, so this case
+			// pins that a one-shot fragment step which declared nothing stays
+			// claimable by any fresh pool slot.
+			Metadata: map[string]string{},
 		}},
 	}
 
@@ -2241,10 +2242,10 @@ func TestDecorateDynamicFragmentRecipePerStepOneShotPoolTargetLeavesStepIndepend
 		Steps: []formula.RecipeStep{{
 			ID:    "expansion.work",
 			Title: "Work independently",
+			// See the fallback case above: the group is left unseeded because
+			// a declared group is propagated, not dropped, under #6360.
 			Metadata: map[string]string{
-				beadmeta.RunTargetMetadataKey:         "worker",
-				beadmeta.ContinuationGroupMetadataKey: "stale-group",
-				beadmeta.SessionAffinityMetadataKey:   "require",
+				beadmeta.RunTargetMetadataKey: "worker",
 			},
 		}},
 	}
