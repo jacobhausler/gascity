@@ -36,6 +36,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nothing. Every other outcome leaves it zero, and zero there means the copy's
   size is not something the verdict established — not that the copy is empty.
 
+- **A provider that can never have a conversation key now says so.** gc learns a
+  provider-side conversation id two ways: it assigns one at fresh start
+  (`session_id_flag`), or the provider's own session-start hook reports it back
+  to `gc prime --hook`. A provider offering neither — `builtin:grok`,
+  `builtin:amp`, `builtin:auggie` today — gets no `session_key` at all, so a
+  restart cannot reattach to the previous conversation and keyed transcript
+  discovery has nothing to key on. The session runs, `gc sessions` calls it
+  healthy, and the transcript view serves provider-neutral text; nothing
+  reported the difference, which is how the gap survived 94 sessions
+  (gastownhall/gascity#6083). `gc doctor`'s `provider-parity` check now names
+  it as a capability gap — deliberately worded apart from "this session's
+  transcript is missing" — and start preparation warns once per
+  session+provider at the moment it declines to mint the key.
+  `transcript.ProviderConversationKeyGap` is the one predicate both read, and it
+  stays quiet for a hook-managed provider (which learns its id from the hook)
+  and for families whose discovery is work-dir keyed (which never needed an id).
+  This only speaks: it never sets the flag, which is inert at best and breaks
+  the next restart on a provider whose CLI rejects it alongside its resume verb.
+
 ### Changed
 
 - **`gc pack registry publish` now refuses an unscoped pack name unless you

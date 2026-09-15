@@ -1139,6 +1139,15 @@ func buildPreparedStartWithWorkDirResolver(
 		// way the probe above went for the key it replaced.
 		transcriptState = sessTranscriptAbsent
 	}
+	// The mint above is conditional on a capability the provider either has or
+	// does not have. When gc declined to mint, and no hook could supply the key
+	// later, say so at the moment the decision bites: the degradation is
+	// otherwise invisible until someone notices the session has no history
+	// (#6083). Providers that learn their id from a session-start hook are
+	// excluded by the predicate, so this never cries wolf on healthy continuity.
+	if candidate.info.SessionKey == "" {
+		warnSessionCannotAssignSessionID(candidate.name(), tp.ResolvedProvider)
+	}
 	// firstStart classification routes through the level-triggered converge core
 	// (deriveFirstStart), fed the transcript probe taken above. Passing a real
 	// state (rather than sessTranscriptUnknown) activates both crash-loop

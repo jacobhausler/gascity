@@ -246,6 +246,27 @@ type ResolvedProvider struct {
 	EffectiveDefaults map[string]string
 }
 
+// CanAssignSessionID reports whether gc can hand this provider a
+// caller-supplied conversation id at fresh start — the capability that lets gc
+// mint the durable session_key up front and later resume that same
+// conversation, or key its transcript lookup on it. It answers exactly one
+// question, "does the resolved spec carry a session_id_flag", because that
+// flag is the only mechanism gc has to name a provider-side conversation:
+// gc never learns one afterwards (worker.derivedResumeSessionKey declines for
+// every provider today), so a provider answering false has no session_key at
+// all. The consequences of false are silent unless stated: a restart cannot
+// reattach to the previous conversation, and keyed transcript lookup has
+// nothing to key on (gastownhall/gascity#6083).
+//
+// Callers must not read false as "misconfigured". The config key exists for
+// every provider, but it is inert — and on a provider that rejects the flag
+// alongside its resume verb, actively harmful — unless the provider CLI
+// accepts a caller-supplied id. Only the claude family has that today, which
+// is why no other built-in spec sets it.
+func (r ResolvedProvider) CanAssignSessionID() bool {
+	return strings.TrimSpace(r.SessionIDFlag) != ""
+}
+
 const (
 	// SessionTransportACP creates sessions through the Agent Client Protocol.
 	SessionTransportACP = "acp"

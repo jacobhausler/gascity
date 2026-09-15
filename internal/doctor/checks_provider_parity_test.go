@@ -193,3 +193,49 @@ func TestProviderParityCheck_DeterministicOrdering(t *testing.T) {
 		t.Errorf("Details[1] should mention zproblem second: %q", r.Details[1])
 	}
 }
+
+// A provider with no route to a conversation id — no session_id_flag for gc to
+// assign by, and no session-start hook that could report one back — silently
+// loses transcript continuity and resume across restarts. #6083 went unnoticed
+// across 94 sessions precisely because nothing said so; doctor must.
+func TestProviderParityCheck_FlagsProviderWithNoConversationKeyRoute(t *testing.T) {
+	base := "builtin:grok"
+	cfg := &config.City{
+		Agents: []config.Agent{{Name: "coder", Provider: "grok-worker"}},
+		Providers: map[string]config.ProviderSpec{
+			"grok-worker": {Base: &base},
+		},
+	}
+	r := NewProviderParityCheck(cfg).Run(&CheckContext{})
+	if r.Status != StatusWarning {
+		t.Fatalf("Status = %v, want StatusWarning; details=%v", r.Status, r.Details)
+	}
+	if len(r.Details) != 1 {
+		t.Fatalf("Details = %d, want 1 (grok has resume, so only the key gap): %v", len(r.Details), r.Details)
+	}
+	if !strings.Contains(r.Details[0], `"grok-worker"`) || !strings.Contains(r.Details[0], "session_id_flag") {
+		t.Errorf("Details[0] must name the provider and the missing knob: %q", r.Details[0])
+	}
+	if !strings.Contains(r.Details[0], "capability gap") {
+		t.Errorf("Details[0] must say this is a capability gap, not a missing transcript: %q", r.Details[0])
+	}
+}
+
+// Hook-managed providers report their conversation id to `gc prime --hook`, so
+// a missing session_id_flag costs them nothing and must not be flagged: a
+// warning that fires on healthy continuity is worse than the silence #6083 was.
+func TestProviderParityCheck_HookManagedProviderNotFlaggedForKeyRoute(t *testing.T) {
+	for _, base := range []string{"builtin:codex", "builtin:opencode", "builtin:gemini"} {
+		b := base
+		cfg := &config.City{
+			Agents: []config.Agent{{Name: "coder", Provider: "wrapped"}},
+			Providers: map[string]config.ProviderSpec{
+				"wrapped": {Base: &b},
+			},
+		}
+		r := NewProviderParityCheck(cfg).Run(&CheckContext{})
+		if r.Status != StatusOK {
+			t.Errorf("base %s: Status = %v, want StatusOK; details=%v", base, r.Status, r.Details)
+		}
+	}
+}
