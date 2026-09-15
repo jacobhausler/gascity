@@ -492,6 +492,7 @@ func TestProviderFieldSync(t *testing.T) {
 		"SupportsACP":            "tri-state *bool; merged via MergeProviderOverBuiltin, not ProviderPatch",
 		"UpstreamEnv":            "harness serving-env binding; merged via MergeProviderOverBuiltin, not ProviderPatch",
 		"SupportsHooks":          "tri-state *bool; merged via MergeProviderOverBuiltin, not ProviderPatch",
+		"BoxArgs":                "tri-state *bool; runtime-boundary flag, merged via the provider chain, not ProviderPatch",
 		"InstructionsFile":       "internal config path, not patched",
 		"ResumeFlag":             "internal resume config, not patched directly (use ResumeCommand)",
 		"ResumeStyle":            "internal resume config, not patched directly (use ResumeCommand)",

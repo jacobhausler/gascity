@@ -118,6 +118,10 @@ type ProviderSpec struct {
 	// SupportsHooks indicates the provider has an executable hook mechanism
 	// (settings.json, plugins, etc.) for lifecycle events.
 	SupportsHooks *bool `toml:"supports_hooks,omitempty"`
+	// BoxArgs opts this provider's declared argv into the command a box runs.
+	// The Nomad runtime normally owns argv and drops Args there (cr-8eagyh);
+	// an exec-mode provider must keep it, or the box is an interactive TUI.
+	BoxArgs *bool `toml:"box_args,omitempty"`
 	// InstructionsFile is the filename the provider reads for project instructions
 	// (e.g., "CLAUDE.md", "AGENTS.md"). Empty defaults to "AGENTS.md".
 	InstructionsFile string `toml:"instructions_file,omitempty"`
@@ -243,9 +247,12 @@ type ResolvedProvider struct {
 	// RuntimeEnv carries the per-runtime provider env declared under
 	// [providers.<name>.runtime_env.<runtime>]; applied by
 	// ApplyRuntimeProviderShape for the session's resolved runtime.
-	RuntimeEnv       map[string]map[string]string
-	SupportsACP      bool
-	SupportsHooks    bool
+	RuntimeEnv    map[string]map[string]string
+	SupportsACP   bool
+	SupportsHooks bool
+	// BoxArgs is the resolved box_args declaration; see ProviderSpec.BoxArgs.
+	// Applied by ApplyRuntimeProviderShape for the session's resolved runtime.
+	BoxArgs          bool
 	InstructionsFile string
 	ResumeFlag       string
 	ResumeStyle      string

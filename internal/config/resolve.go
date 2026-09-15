@@ -286,6 +286,9 @@ func MergeProviderOverBuiltin(base, city ProviderSpec) ProviderSpec {
 	if city.SupportsHooks != nil {
 		result.SupportsHooks = city.SupportsHooks
 	}
+	if city.BoxArgs != nil {
+		result.BoxArgs = city.BoxArgs
+	}
 	if city.InstructionsFile != "" {
 		result.InstructionsFile = city.InstructionsFile
 	}
@@ -651,6 +654,7 @@ func specToResolved(name string, spec *ProviderSpec) *ResolvedProvider {
 		AcceptStartupDialogs:   cloneBoolPtr(spec.AcceptStartupDialogs),
 		SupportsACP:            derefBool(spec.SupportsACP),
 		SupportsHooks:          derefBool(spec.SupportsHooks),
+		BoxArgs:                derefBool(spec.BoxArgs),
 		InstructionsFile:       spec.InstructionsFile,
 		ResumeFlag:             spec.ResumeFlag,
 		ResumeStyle:            spec.ResumeStyle,
@@ -878,6 +882,10 @@ func resolvedChainToSpec(r ResolvedProvider, leaf ProviderSpec) ProviderSpec {
 	if leaf.SupportsHooks == nil && providerBoolFieldSet(r, "supports_hooks") {
 		v := r.SupportsHooks
 		out.SupportsHooks = &v
+	}
+	if leaf.BoxArgs == nil && providerBoolFieldSet(r, "box_args") {
+		v := r.BoxArgs
+		out.BoxArgs = &v
 	}
 	if r.InstructionsFile != "" {
 		out.InstructionsFile = r.InstructionsFile

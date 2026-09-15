@@ -38,6 +38,17 @@ func RuntimeProviderEnv(provider *ResolvedProvider, runtimeProvider string) map[
 //	Args           argv never reaches the agent — the box launches gc's own
 //	               rendered command, so orchestrator-shaped flags are dead weight
 //	               that only make the config lie about what runs
+//
+//	               EXCEPTION: `box_args = true` on the provider. The sentence
+//	               above is true of the launch body and false of the argv inside
+//	               it. A provider that is started in one-shot exec mode declares
+//	               its subcommand, its sandbox flags and its `-c` settings in
+//	               args_append — facts about WHAT the agent is — and dropping
+//	               them does not make the config honest, it converts the box into
+//	               an interactive TUI that answers one turn and parks at its
+//	               prompt forever (cr-jsxjcr). Opted in, the declared argv is kept
+//	               minus whatever only the orchestrator can resolve
+//	               (runtimeBoxArgs); not opted in, the row above is unchanged.
 //	SupportsHooks  gc's hooks are not installed inside the box
 //	PromptMode     priming cannot ride argv here; the prompt arrives over tmux
 //
@@ -59,7 +70,16 @@ func ApplyRuntimeProviderShape(provider *ResolvedProvider, runtimeProvider strin
 	if provider == nil || strings.TrimSpace(runtimeProvider) != NomadRuntimeProvider {
 		return
 	}
-	provider.Args = nil
+	// PromptMode stays the runtime's call even for an opted-in provider: the
+	// box is not primed through this argv by gc, it is primed by the runtime
+	// adapter from the nudge the start wire already carries
+	// (cmd/gc/prompt_delivery.go). Flipping it to "arg" here would make gc
+	// append the prompt to a command the adapter may run more than once.
+	if provider.BoxArgs {
+		provider.Args = runtimeBoxArgs(provider.Args)
+	} else {
+		provider.Args = nil
+	}
 	provider.SupportsHooks = false
 	provider.PromptMode = "none"
 
@@ -74,6 +94,59 @@ func ApplyRuntimeProviderShape(provider *ResolvedProvider, runtimeProvider strin
 			provider.Env[k] = v
 		}
 	}
+}
+
+// codexSettingFlag and codexModelProviderSetting name the one Codex argv form
+// this file has to police at the box boundary. internal/buildimage/codex.go
+// reads the same pairs when it bakes the in-box config.toml.
+const (
+	codexSettingFlag          = "-c"
+	codexModelProviderSetting = "model_provider"
+)
+
+// runtimeBoxArgs keeps the argv a provider declared for the box and drops the
+// entries that name the ORCHESTRATOR instead of the agent.
+//
+// The one entry today is `-c model_provider=<name>`. That name is a key in the
+// host's provider catalog, while the box authenticates against the provider
+// stanza internal/buildimage/codex.go bakes into its own config.toml. Forwarding
+// the host spelling makes the agent ask for a provider its own config does not
+// define — the same host-boundary leak RuntimeProviderEnv closes for
+// CODEX_HOME, in argv form. Everything else is kept verbatim, in order: this is
+// a deny-list of host-only settings, not a re-rendering of the provider's argv,
+// so the exec subcommand and the flags around it arrive exactly as authored.
+//
+// Both Codex spellings are handled — `-c key=value` as two argv entries and
+// `-ckey=value` fused into one. A `-c` with no following value is passed
+// through untouched rather than guessing about it.
+func runtimeBoxArgs(args []string) []string {
+	if len(args) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == codexSettingFlag && i+1 < len(args) && isHostOnlyCodexSetting(args[i+1]):
+			i++ // drop the flag with its value
+		case strings.HasPrefix(arg, codexSettingFlag) && len(arg) > len(codexSettingFlag) &&
+			isHostOnlyCodexSetting(arg[len(codexSettingFlag):]):
+			// fused form: -cmodel_provider=x
+		default:
+			out = append(out, arg)
+		}
+	}
+	return out
+}
+
+// isHostOnlyCodexSetting reports whether one `-c` payload (the "key=value" half)
+// names a Codex setting that only resolves on the orchestrator.
+func isHostOnlyCodexSetting(raw string) bool {
+	key, _, ok := strings.Cut(strings.TrimSpace(raw), "=")
+	if !ok {
+		return false
+	}
+	return strings.TrimSpace(key) == codexModelProviderSetting
 }
 
 // RuntimeSelectionEnv returns the environment declared for a runtime selection

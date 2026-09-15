@@ -2528,6 +2528,10 @@
           "type": "boolean",
           "description": "SupportsHooks indicates the provider has an executable hook mechanism\n(settings.json, plugins, etc.) for lifecycle events."
         },
+        "box_args": {
+          "type": "boolean",
+          "description": "BoxArgs opts this provider's declared argv into the command a box runs.\nThe Nomad runtime normally owns argv and drops Args there (cr-8eagyh);\nan exec-mode provider must keep it, or the box is an interactive TUI."
+        },
         "instructions_file": {
           "type": "string",
           "description": "InstructionsFile is the filename the provider reads for project instructions\n(e.g., \"CLAUDE.md\", \"AGENTS.md\"). Empty defaults to \"AGENTS.md\"."
