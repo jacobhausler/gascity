@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os/exec"
 	"strings"
 	"testing"
