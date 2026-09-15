@@ -419,14 +419,18 @@ func renormalizeFederatedCommand(federated string) string {
 	// after the unlimited reader. Its single-store stderr sink sits after the
 	// block, while the federated failure clause sits after the command
 	// substitution. Normalize that block boundary as one sanctioned reader
-	// difference, keyed on the boundary itself rather than on the step that
-	// follows it: the routed tier now closes this substitution with the
-	// cross-class merge (cr-gnpx2o) instead of the preference reorder, and a
-	// rule that named only the old neighbour would read that shared change as
-	// a topology difference.
+	// difference. The routed tier now closes this substitution with the
+	// cross-class merge (cr-gnpx2o) rather than with the preference reorder,
+	// which is a second boundary of the same shape and gets its own rule: the
+	// count-form also contains `; }) || exit $?; ` inside its own reader
+	// blocks, so a blanket rule there would normalize a real topology
+	// difference away.
 	federated = strings.ReplaceAll(federated,
-		`; }) || exit $?; `,
-		`; } 2>/dev/null); `)
+		`; }) || exit $?; gc_preferred_pool_demand=`,
+		`; } 2>/dev/null); gc_preferred_pool_demand=`)
+	federated = strings.ReplaceAll(federated,
+		`; }) || exit $?; gc_routed_merged=`,
+		`; } 2>/dev/null); gc_routed_merged=`)
 	return federated
 }
 

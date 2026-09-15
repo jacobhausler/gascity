@@ -175,8 +175,9 @@ func TestRoutedReadyTierDoesNotServeADuplicateRow(t *testing.T) {
 func TestRoutedReadyTierEmptyWhenNeitherLegHasDemand(t *testing.T) {
 	for _, shape := range routedTierTopologies() {
 		t.Run(shape.name, func(t *testing.T) {
-			empty := fakeRoutedTierReader("", "")
-			_, stdout := runRoutedReadyTierRaw(t, shape.topo, empty)
+			// Every read answers an empty array — including the row the two
+			// legs otherwise share.
+			_, stdout := runRoutedReadyTierRaw(t, shape.topo, fakeBDEmpty)
 			if got := strings.TrimSpace(stdout); got != "[]" {
 				t.Fatalf("no-demand answer must be an empty array, got %q", stdout)
 			}
