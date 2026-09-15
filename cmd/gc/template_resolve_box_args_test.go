@@ -18,7 +18,7 @@ import (
 // field the shape mutates would pass whether or not anything reached the box.
 //
 // TestResolveTemplateAppliesNomadRuntimeShapeBeforeComposingCommand pins the
-// shipped behaviour: a lane naming runtime_provider = "nomad" gets the bare
+// shipped behavior: a lane naming runtime_provider = "nomad" gets the bare
 // interactive client, primed by the adapter. This one pins the exception: a
 // provider that declares `box_args = true` is an exec-mode agent, and dropping
 // its argv does not make the config honest — it gives every box the TUI, which
