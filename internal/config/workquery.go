@@ -446,10 +446,65 @@ func routedReadyTierCommand(topo QueryTopology) string {
 	// routed work behind it to fall through to instead of idle-exiting; the
 	// hook layer (filterUnreadyHookCandidates) strips the blocked head from
 	// the result.
-	live := bdReadyPoolDemandLiveWorkflowShell("--limit=20", topo) + readyReaderStderrSink(topo.FederatedReady)
-	aged := bdReadyPoolDemandShell("--limit=20", topo) + readyReaderStderrSink(topo.FederatedReady)
-	return `live=$(` + live + `)` + readyReaderFailurePropagation(topo.FederatedReady) + `; ` +
-		`[ -n "$live" ] && [ "$live" != "[]" ] && printf "%s" "$live" || ` + aged
+	//
+	// Both legs are read and merged, not short-circuited. An earlier shape
+	// returned the live leg whole whenever it was non-empty and read the aged
+	// leg only otherwise, which made the two classes compete for a slot they
+	// were never compared for; see readyTierMergeJQ. The cost is that the
+	// canonical read now always runs — it is the same bounded per-target ready
+	// read the reconciler's count-form (poolDemandCountShell) already pays
+	// every tick, and correctness of the claim window is worth it.
+	live := bdReadyPoolDemandLiveWorkflowShell("--limit="+strconv.Itoa(routedReadyTierWindow), topo) + readyReaderStderrSink(topo.FederatedReady)
+	aged := bdReadyPoolDemandShell("--limit="+strconv.Itoa(routedReadyTierWindow), topo) + readyReaderStderrSink(topo.FederatedReady)
+	fed := topo.FederatedReady
+	return `gc_routed_live=$(` + live + `)` + readyReaderFailurePropagation(fed) + `; ` +
+		`gc_routed_aged=$(` + aged + `)` + readyReaderFailurePropagation(fed) + `; ` +
+		`gc_routed_merged=$(printf '%s\n%s' "$gc_routed_live" "$gc_routed_aged" | ` + readyTierMergeJQ(routedReadyTierWindow) + ` 2>/dev/null); ` +
+		`[ -n "$gc_routed_merged" ] || gc_routed_merged="$gc_routed_live"; ` +
+		`[ "$gc_routed_merged" != "null" ] || gc_routed_merged="$gc_routed_live"; ` +
+		`printf "%s" "$gc_routed_merged"`
+}
+
+// routedReadyTierWindow is the width of the routed Tier-3 claim window: the
+// number of ordered candidates one hook tick may choose from.
+const routedReadyTierWindow = 20
+
+// readyTierMergeJQ renders the post-read merge that turns the routed tier's two
+// legs into ONE candidate window ordered by the reader's canonical ready order,
+// (priority, created_at, id).
+//
+// This is the cross-class half of the claim-window ordering that the leg
+// comments above already defend inside a single leg. Each leg computes that
+// order for itself, so rows from different legs were never compared: the caller
+// returned the root-presence (graph-class) leg whole whenever it was non-empty
+// and only otherwise read the canonical (work-class) leg. A routed P0 work bead
+// was therefore not merely behind the graph rows in the window — it was not in
+// the window at all, and no amount of draining the graph rows could surface it
+// while new ones kept arriving (cr-gnpx2o, measured 2026-09-15: five
+// mechanic-review seats spent three hours on the same handful of mol-do-work
+// step rows while six P0 cr- atoms sat ready at the head of the reader's own
+// merged order, never reachable by the probe).
+//
+// Dedupe comes before the sort: a root-present row that is not gc.kind=workflow
+// satisfies both legs (the canonical leg carries no root filter), so merging
+// without unique_by would spend two slots of a bounded window on one candidate.
+//
+// A row reporting no priority sorts LAST, not first: both readers populate the
+// field on every row they serve, so a row that does not is the anomaly, and the
+// anomaly must not displace a P0. tostring keeps the term total for readers that
+// spell priority as a string; single-digit priorities sort identically either
+// way.
+//
+// A malformed payload makes jq exit non-zero, which the caller resolves back to
+// the live leg rather than to an empty array — the same fail-open the
+// preferExecutablePoolDemandScript comment promises the hook.
+func readyTierMergeJQ(limit int) string {
+	expr := `reduce .[] as $rows ([]; . + $rows) | unique_by(.id) | ` +
+		`sort_by([((.priority // 9) | tostring), ((.created_at // "") | tostring), (.id // "")])`
+	if limit > 0 {
+		expr += ` | .[:` + strconv.Itoa(limit) + `]`
+	}
+	return shellquote.Join([]string{"jq", "-c", "-s", expr})
 }
 
 // poolDemandCountShell emits the reconciler count-form for target: it counts
