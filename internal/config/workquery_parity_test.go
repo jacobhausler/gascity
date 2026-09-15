@@ -431,6 +431,13 @@ func renormalizeFederatedCommand(federated string) string {
 	federated = strings.ReplaceAll(federated,
 		`; }) || exit $?; gc_routed_merged=`,
 		`; } 2>/dev/null); gc_routed_merged=`)
+	// The merged tier hands its result to the hook through a printf rather than
+	// through a read, so the outer probe's federated failure clause now sits at
+	// the end of a printf instead of after a --limit flag. Same reader
+	// difference, new spelling (cr-gnpx2o).
+	federated = strings.ReplaceAll(federated,
+		`"$gc_routed_merged") || exit $?;`,
+		`"$gc_routed_merged");`)
 	return federated
 }
 
