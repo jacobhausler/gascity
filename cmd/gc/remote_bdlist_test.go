@@ -25,9 +25,9 @@ func TestDoBdListRemoteJSONRoutesToCity(t *testing.T) {
 
 	var seed, seedErr bytes.Buffer
 	if code := doContextAdd(clientcontext.Context{
-		Name:               "prod",
-		URL:                srv.URL,
-		City:               "mc-city",
+		Name: "prod",
+		URL:  srv.URL,
+		City: "mc-city",
 	}, &seed, &seedErr); code != 0 {
 		t.Fatalf("seed context: %q", seedErr.String())
 	}
@@ -62,9 +62,9 @@ func TestDoBdShowRemoteStillUsesCapabilityGate(t *testing.T) {
 	defer srv.Close()
 	var seed, seedErr bytes.Buffer
 	if code := doContextAdd(clientcontext.Context{
-		Name:               "prod",
-		URL:                srv.URL,
-		City:               "mc-city",
+		Name: "prod",
+		URL:  srv.URL,
+		City: "mc-city",
 	}, &seed, &seedErr); code != 0 {
 		t.Fatalf("seed context: %q", seedErr.String())
 	}
