@@ -157,6 +157,15 @@ existing-bead** shape only: `gc --context prod sling <agent> <bead-id>`. Inline
 text, `--stdin`, and the 1-arg target-inference form are refused (a remote city
 cannot see your local rig config or create a local bead).
 
+`--dry-run` is served **read-only**: it GETs the bead, the agent table and the
+rig table from that city, then prints the route the real sling would write — or
+the refusal it would print (unknown target, an epic, a cross-store or cross-rig
+route) — and never POSTs, so `gc.routed_to` on the remote bead is untouched.
+Everything it checks comes from the remote city's own config, never your local
+one, and it states what it could not check (dependency cycle, workflow launch
+detail). `--dry-run` with a formula stays refused: a workflow launch has no
+read-only preview on the control plane.
+
 ## 6. Failure and resume recipes
 
 The CLI prints these recipes itself; here is what each means.

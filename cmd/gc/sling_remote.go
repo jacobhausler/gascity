@@ -14,8 +14,9 @@ import (
 // forwards the raw sling parameters (target, bead-or-formula, vars, scope,
 // force, title) and renders the result. Modes that require local state are
 // refused with a clear message: inline text (needs a locally-created bead), the
-// 1-arg form (infers the target from local rig config), and the local
-// batch/dry-run flags the server API does not model.
+// 1-arg form (infers the target from local rig config), and the local batch
+// flag the server API does not model. --dry-run is answered read-only by
+// cmdSlingRemoteDryRun instead of being refused.
 func cmdSlingRemote(c *api.Client, target *remoteTarget, args []string, isFormula, doNudge, force bool, title string, vars []string, merge string, noConvoy, owned, reassign bool, onFormula string, noFormula, fromStdin, dryRun bool, scopeKind, scopeRef string, jsonOutput bool, stdout, stderr io.Writer) int {
 	fail := func(code, message string) int {
 		if jsonOutput {
@@ -28,9 +29,11 @@ func cmdSlingRemote(c *api.Client, target *remoteTarget, args []string, isFormul
 	if fromStdin {
 		return fail("unsupported_remote", "gc sling: --stdin (inline text) is not supported for a remote city; sling an existing bead")
 	}
-	if dryRun {
-		return fail("unsupported_remote", "gc sling: --dry-run is not supported for a remote city")
-	}
+	// --dry-run is served read-only by cmdSlingRemoteDryRun below: it pre-flights
+	// the target, the bead class and the store agreement from the remote city's
+	// own reads and never POSTs. It is dispatched after the shared argument
+	// checks so a malformed invocation is refused identically on both paths.
+
 	// --nudge and --on stay refused for a remote city. --nudge needs server-side
 	// delivery wiring. --on's per-child convoy expansion is local-only: the remote
 	// handler would attach the wisp to a convoy CONTAINER instead of each child (a
@@ -57,6 +60,11 @@ func cmdSlingRemote(c *api.Client, target *remoteTarget, args []string, isFormul
 	// prose as a bogus bead ID.
 	if !isFormula && strings.ContainsAny(args[1], " \t\n") {
 		return fail("unsupported_remote", "gc sling: inline text is not supported for a remote city; sling an existing bead by ID")
+	}
+
+	// The read-only pre-flight never reaches the wire mutation below.
+	if dryRun {
+		return cmdSlingRemoteDryRun(c, target, args, isFormula, force, jsonOutput, stdout, stderr)
 	}
 
 	vmap, err := parseSlingVars(vars)
