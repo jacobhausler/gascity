@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/gastownhall/gascity/internal/agentutil"
+	"github.com/gastownhall/gascity/internal/api"
 	"github.com/gastownhall/gascity/internal/beadmeta"
 	"github.com/gastownhall/gascity/internal/beads"
 	"github.com/gastownhall/gascity/internal/config"
@@ -281,6 +282,22 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 		return 1
 	}
 
+	// A box has no local city store, so it cannot run the configured shell
+	// work_query. The remote read leg asks the city for open beads and applies
+	// the same route predicate as the claim path. Keep this branch query-only:
+	// remote --claim still reaches the existing capability gate unchanged.
+	if !opts.Claim {
+		remoteClient, isRemote, _, remoteErr := resolveReadTarget()
+		if remoteErr != nil {
+			if readRemoteSelection().hasExplicitRemote() {
+				fmt.Fprintf(stderr, "gc hook: %v\n", remoteErr) //nolint:errcheck // best-effort stderr
+				return 1
+			}
+		} else if isRemote {
+			return remoteHookWorkQuery(remoteClient, remoteHookQueryIdentities(agentName), stdout, stderr)
+		}
+	}
+
 	cityPath, err := resolveCity()
 	if err != nil {
 		fmt.Fprintf(stderr, "gc hook: %v\n", err) //nolint:errcheck // best-effort stderr
@@ -492,6 +509,86 @@ func cmdHookWithOptions(args []string, opts hookCommandOptions, stdout, stderr i
 		Identities:   identityCandidates,
 		RouteTargets: routeTargets,
 	})
+}
+
+// remoteHookQueryIdentities returns the runtime names that may own or receive
+// work for a plain remote hook query. A remote query cannot resolve an agent
+// from city config, so it uses the same environment projection available to a
+// worker box. Keep the most specific name first to preserve local query order.
+func remoteHookQueryIdentities(agentName string) []string {
+	var identities []string
+	add := func(candidate string) {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			return
+		}
+		for _, existing := range identities {
+			if existing == candidate {
+				return
+			}
+		}
+		identities = append(identities, candidate)
+	}
+	add(agentName)
+	for _, key := range []string{"GC_ALIAS", "GC_AGENT", "GC_SESSION_NAME", "GC_SESSION_ID", "GC_TEMPLATE"} {
+		add(os.Getenv(key))
+	}
+	return identities
+}
+
+// remoteHookWorkQuery lists the remote city's open beads once and renders the
+// subset visible to this worker. gc.routed_to is metadata, not the assignee
+// column, so filtering by assignee at the API boundary would hide fresh work.
+// The canonical hookClaimMatchesRoute predicate keeps this display leg and
+// the local claim leg in agreement.
+type remoteHookBeadLister interface {
+	ListBeads(api.ListBeadsOpts) (api.CachedRead[[]beads.Bead], error)
+}
+
+func remoteHookWorkQuery(client remoteHookBeadLister, identities []string, stdout, stderr io.Writer) int {
+	listed, err := client.ListBeads(api.ListBeadsOpts{Status: "open"})
+	if err != nil {
+		fmt.Fprintf(stderr, "gc hook: listing remote open work: %v\n", err) //nolint:errcheck // best-effort stderr
+		return 1
+	}
+
+	candidates := remoteHookQueryCandidates(listed.Body, identities)
+	return doHook("remote routed work", "", false, func(string, string) (string, error) {
+		data, err := json.Marshal(candidates)
+		if err != nil {
+			return "", err
+		}
+		return string(data), nil
+	}, stdout, stderr, hookVisibility{})
+}
+
+func remoteHookQueryCandidates(listed []beads.Bead, identities []string) []beads.Bead {
+	var candidates []beads.Bead
+	seen := make(map[string]bool)
+	for _, identity := range identities {
+		identity = strings.TrimSpace(identity)
+		if identity == "" {
+			continue
+		}
+		for _, candidate := range listed {
+			if candidate.ID == "" || seen[candidate.ID] || !strings.EqualFold(strings.TrimSpace(candidate.Status), "open") {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(candidate.Type), "message") {
+				continue
+			}
+			if assignee := strings.TrimSpace(candidate.Assignee); assignee != "" {
+				if !hookClaimHasIdentity(assignee, []string{identity}) {
+					continue
+				}
+			} else if !hookClaimMatchesRoute(candidate, []string{identity}) {
+				continue
+			}
+			seen[candidate.ID] = true
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates
 }
 
 // hookClaimSessionVerdict classifies a runtime session's fitness to claim routed
