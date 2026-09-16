@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -16,20 +15,19 @@ func TestDoBdListRemoteJSONRoutesToCity(t *testing.T) {
 
 	var gotPath string
 	var gotQuery string
-	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := newEventsTestServer(t, testEventRoutes{cityBeads: func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotQuery = r.URL.RawQuery
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"items":[{"id":"remote-task-1","title":"remote task","status":"open","issue_type":"task","created_at":"2026-09-16T00:00:00Z","updated_at":"2026-09-16T00:00:00Z"}],"total":1}`))
-	}))
+	}})
 	defer srv.Close()
 
 	var seed, seedErr bytes.Buffer
 	if code := doContextAdd(clientcontext.Context{
 		Name:               "prod",
 		URL:                srv.URL,
-		City:               "remote-city",
-		InsecureSkipVerify: true,
+		City:               "mc-city",
 	}, &seed, &seedErr); code != 0 {
 		t.Fatalf("seed context: %q", seedErr.String())
 	}
@@ -40,8 +38,8 @@ func TestDoBdListRemoteJSONRoutesToCity(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("doBd remote list = %d, want 0; stdout=%q stderr=%q", code, out.String(), errb.String())
 	}
-	if gotPath != "/v0/city/remote-city/beads" {
-		t.Fatalf("remote path = %q, want /v0/city/remote-city/beads", gotPath)
+	if gotPath != "/v0/city/mc-city/beads" {
+		t.Fatalf("remote path = %q, want /v0/city/mc-city/beads", gotPath)
 	}
 	if !strings.Contains(gotQuery, "status=open") {
 		t.Fatalf("remote query = %q, want status=open", gotQuery)
@@ -60,14 +58,13 @@ func TestDoBdListRemoteJSONRoutesToCity(t *testing.T) {
 func TestDoBdShowRemoteStillUsesCapabilityGate(t *testing.T) {
 	t.Setenv("GC_HOME", t.TempDir())
 
-	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	srv := newEventsTestServer(t, testEventRoutes{})
 	defer srv.Close()
 	var seed, seedErr bytes.Buffer
 	if code := doContextAdd(clientcontext.Context{
 		Name:               "prod",
 		URL:                srv.URL,
-		City:               "remote-city",
-		InsecureSkipVerify: true,
+		City:               "mc-city",
 	}, &seed, &seedErr); code != 0 {
 		t.Fatalf("seed context: %q", seedErr.String())
 	}

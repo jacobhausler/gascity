@@ -1360,6 +1360,7 @@ func TestEventsRotateHelpIncludesFlagsAndExample(t *testing.T) {
 
 type testEventRoutes struct {
 	cityEvents       func(http.ResponseWriter, *http.Request)
+	cityBeads        func(http.ResponseWriter, *http.Request)
 	cityRotate       func(http.ResponseWriter, *http.Request)
 	cityStream       func(http.ResponseWriter, *http.Request)
 	supervisorEvents func(http.ResponseWriter, *http.Request)
@@ -1375,6 +1376,11 @@ func newEventsTestServer(t *testing.T, routes testEventRoutes) *httptest.Server 
 				t.Fatalf("unexpected city events request: %s", r.URL.String())
 			}
 			routes.cityEvents(w, r)
+		case "/v0/city/mc-city/beads":
+			if routes.cityBeads == nil {
+				t.Fatalf("unexpected city beads request: %s", r.URL.String())
+			}
+			routes.cityBeads(w, r)
 		case "/v0/city/mc-city/events/rotate":
 			if routes.cityRotate == nil {
 				t.Fatalf("unexpected city rotate request: %s", r.URL.String())
