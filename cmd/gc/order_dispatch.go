@@ -3147,6 +3147,16 @@ func sweepClosedOrderTrackingRetention(store beads.Store, now time.Time, policy 
 			if !orderTrackingClosedReferenceTime(run).Before(cutoff) {
 				continue
 			}
+			// Retention prunes history, not work: a closed run whose family
+			// still holds live work is deferred to a later sweep (cr-ybxfw6).
+			holds, guardErr := retentionRunHoldsLiveWork(store, run.ID)
+			if guardErr != nil {
+				deleteErr = errors.Join(deleteErr, guardErr)
+				continue
+			}
+			if holds {
+				continue
+			}
 			// deleteWorkflowBead is the graph-aware delete (dep unwind) the
 			// retention prune uses; it stays raw graph residual.
 			if err := deleteWorkflowBead(store, run.ID); err != nil {
@@ -3205,6 +3215,18 @@ func sweepClosedOrderTrackingRetentionBounded(store beads.Store, now time.Time, 
 			if !orderTrackingClosedReferenceTime(run).Before(cutoff) {
 				continue
 			}
+			// Same live-work guard as the unbounded sweep: a prune that deletes
+			// the tracking row a seat was dispatched from leaves that seat
+			// claiming a bead that answers 404 everywhere (cr-ybxfw6). Deferring
+			// one aged row costs history, deleting it costs the dispatch.
+			holds, guardErr := retentionRunHoldsLiveWork(store, run.ID)
+			if guardErr != nil {
+				deleteErr = errors.Join(deleteErr, guardErr)
+				continue
+			}
+			if holds {
+				continue
+			}
 			if err := deleteWorkflowBead(store, run.ID); err != nil {
 				deleteErr = errors.Join(deleteErr, fmt.Errorf("deleting closed order-tracking bead %q: %w", run.ID, err))
 				continue
@@ -3256,13 +3278,80 @@ func countClosedOrderTrackingRetentionEligible(stores []beads.Store, now time.Ti
 				continue
 			}
 			for _, run := range group[policy.retainLast:] {
-				if orderTrackingClosedReferenceTime(run).Before(cutoff) {
-					total++
+				if !orderTrackingClosedReferenceTime(run).Before(cutoff) {
+					continue
 				}
+				// The preview must not promise a deletion the sweep will refuse,
+				// so it applies the sweep's live-work guard too (cr-ybxfw6).
+				holds, guardErr := retentionRunHoldsLiveWork(store, run.ID)
+				if guardErr != nil {
+					errs = append(errs, guardErr)
+					continue
+				}
+				if holds {
+					continue
+				}
+				total++
 			}
 		}
 	}
 	return total, errors.Join(errs...)
+}
+
+// retentionRunHoldsLiveWork reports whether a CLOSED order-tracking run bead
+// still has unfinished work hanging off it — a step that is open, in progress,
+// or otherwise not closed, reached either by parentage (Children) or by a
+// parent-child dep edge, the two channels collectExpiredBeadClosure treats as
+// ownership.
+//
+// Why retention needs it (cr-ybxfw6): the prune's own contract is that it
+// deletes the closed run row and lets dep unwind + ON DELETE CASCADE drop the
+// row's EDGES, never its child beads — so before this guard the sweep could
+// delete the tracking row a box seat had just been dispatched from while the
+// step it was dispatched to stayed open. The seat then wakes into a claim
+// naming a family whose tracking row is gone. Pruning history is the whole job
+// here, so deferring one aged row until its family is terminal is free; the
+// cost of not deferring is a dispatch with no recovery path.
+//
+// It reads one level (children and parent-child dependents), not a recursive
+// closure: this runs over every aged row in the retention backlog on a
+// watchdog/preview path, and an unbounded walk per candidate is a different
+// engine-load defect. The wisp-GC closure purge holds the recursive guard at
+// collectExpiredBeadClosure.
+func retentionRunHoldsLiveWork(store beads.Store, runID string) (bool, error) {
+	if store == nil {
+		return false, fmt.Errorf("bead store unavailable")
+	}
+	children, err := store.Children(runID, beads.IncludeClosed, beads.WithBothTiers)
+	if err != nil {
+		return false, fmt.Errorf("listing children of closed order-tracking bead %q: %w", runID, err)
+	}
+	for _, child := range children {
+		if beadIsLiveWork(child) {
+			return true, nil
+		}
+	}
+	deps, err := store.DepList(runID, "up")
+	if err != nil {
+		return false, fmt.Errorf("listing dependents of closed order-tracking bead %q: %w", runID, err)
+	}
+	handles := beads.HandlesFor(store)
+	for _, dep := range deps {
+		if dep.Type != "parent-child" || dep.IssueID == "" || dep.IssueID == runID {
+			continue
+		}
+		member, memberErr := handles.Live.Get(dep.IssueID)
+		switch {
+		case errors.Is(memberErr, beads.ErrNotFound):
+			continue
+		case memberErr != nil:
+			return false, fmt.Errorf("live re-verify of dependent %q of closed order-tracking bead %q: %w", dep.IssueID, runID, memberErr)
+		}
+		if beadIsLiveWork(member) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func orderTrackingRetentionBucket(run orders.OrderRun, onlyOrders map[string]struct{}) (string, bool) {

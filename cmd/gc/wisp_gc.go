@@ -754,17 +754,42 @@ func deleteExpiredBeadClosure(store beads.Store, rootID string) error {
 	// external dependents; other stores fall back to per-bead deletion. Because
 	// the delete is not dependent-recursive, collectExpiredBeadClosure must (and
 	// does) gather only the ownership closure so live work outside it is never
-	// reached.
-	ids, err := collectExpiredBeadClosure(store, rootID)
+	// reached — and it reports any closure member that is still live work
+	// separately, which is checked here.
+	ids, liveMembers, err := collectExpiredBeadClosure(store, rootID)
 	if err != nil {
 		return err
+	}
+	if len(liveMembers) > 0 {
+		// A member of the closure is work that has not finished (cr-ybxfw6).
+		// Deleting it with the rest of the family strands the seat holding it:
+		// its id answers 404 on every read AND every write path, so the seat
+		// can neither work the bead, record on it, release it, nor close it —
+		// a dispatch with no recovery path (measured on cr-2b29l, cr-1xcat.3
+		// and cr-04mim, all three claimed off `gc hook --claim` into a row that
+		// no longer existed). Skip the whole closure rather than half-delete a
+		// family around live work; the root becomes collectible again once the
+		// member terminates, and an aged rootless residue is what
+		// reapOrphanedClosedWisps exists to drain.
+		log.Printf("wisp gc: closure purge of %q skipped: closure holds live work (%s)", rootID, strings.Join(liveMembers, ", "))
+		return errBeadNoLongerEligible
 	}
 	return deleteWorkflowBeadsBatch(store, ids)
 }
 
-func collectExpiredBeadClosure(store beads.Store, rootID string) ([]string, error) {
+// collectExpiredBeadClosure gathers rootID's ownership closure — the ids a
+// closure purge would delete — and reports separately the members of that
+// closure that are still live work (see beadIsLiveWork). The two lists are
+// returned apart so a caller can refuse a purge that would reach in-flight
+// work instead of deleting a family around it (cr-ybxfw6).
+//
+// Every member is read through the store's LIVE handle, not the snapshot the
+// enumeration came from: a member reopened or claimed inside the cache window
+// is live, and the same stale-snapshot hazard that ra-nxppyo closed for the
+// root applies to its descendants.
+func collectExpiredBeadClosure(store beads.Store, rootID string) (ids []string, liveMembers []string, err error) {
 	if store == nil {
-		return nil, fmt.Errorf("bead store unavailable")
+		return nil, nil, fmt.Errorf("bead store unavailable")
 	}
 	rootOwned := make([]string, 0, 4)
 	related, err := store.List(beads.ListQuery{
@@ -773,7 +798,7 @@ func collectExpiredBeadClosure(store beads.Store, rootID string) ([]string, erro
 		TierMode:      beads.TierBoth,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list workflow-owned beads for %s: %w", rootID, err)
+		return nil, nil, fmt.Errorf("list workflow-owned beads for %s: %w", rootID, err)
 	}
 	for _, bead := range related {
 		if bead.ID != "" && bead.ID != rootID {
@@ -782,7 +807,8 @@ func collectExpiredBeadClosure(store beads.Store, rootID string) ([]string, erro
 	}
 
 	seen := make(map[string]struct{}, len(rootOwned)+1)
-	ids := make([]string, 0, len(rootOwned)+1)
+	ids = make([]string, 0, len(rootOwned)+1)
+	liveMembers = make([]string, 0, 1)
 	var visit func(string) error
 	visit = func(id string) error {
 		if id == "" {
@@ -792,6 +818,24 @@ func collectExpiredBeadClosure(store beads.Store, rootID string) ([]string, erro
 			return nil
 		}
 		seen[id] = struct{}{}
+
+		member, liveErr := beads.HandlesFor(store).Live.Get(id)
+		switch {
+		case errors.Is(liveErr, beads.ErrNotFound):
+			// Already gone — nothing to collect and nothing to protect.
+			return nil
+		case liveErr != nil:
+			// An unreadable member cannot be PROVEN finished; refuse the
+			// purge rather than delete blind, matching the root re-verify.
+			return fmt.Errorf("live re-verify of closure member %q before delete: %w", id, liveErr)
+		}
+		if beadIsLiveWork(member) {
+			liveMembers = append(liveMembers, id)
+			// Its own descendants are part of the same unfinished work, so the
+			// walk stops here — descending would collect a live subtree's
+			// closed residue underneath the seat still standing on it.
+			return nil
+		}
 
 		if id == rootID {
 			for _, relatedID := range rootOwned {
@@ -832,9 +876,24 @@ func collectExpiredBeadClosure(store beads.Store, rootID string) ([]string, erro
 		return nil
 	}
 	if err := visit(rootID); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return ids, nil
+	return ids, liveMembers, nil
+}
+
+// beadIsLiveWork reports whether a bead row still represents work in flight:
+// anything that is not closed. It is deliberately status-only. The assignee is
+// NOT the claim signal here — gc's close path leaves a legitimate closed bead
+// assigned to the seat that finished it, so "has an assignee" would mark most
+// of a healthy closure live and the purge would never run. The lease table is
+// the claim record, and it is not reachable from this read path; status is, and
+// an open or in_progress row is exactly the state a dispatched seat is sitting
+// on. An empty status is treated as live: an unknown row is not evidence that
+// it is safe to delete. "closed" as the only terminal spelling is not an
+// invention here — it is the same test deleteExpiredBeadClosure already applies
+// to the root before it deletes anything.
+func beadIsLiveWork(b beads.Bead) bool {
+	return b.Status != "closed"
 }
 
 func gcRetentionTTLString(d time.Duration) string {

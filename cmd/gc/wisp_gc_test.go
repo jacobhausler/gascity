@@ -564,20 +564,26 @@ func TestWispGC_DoesNotDeleteExternalDependents(t *testing.T) {
 	}
 }
 
+// Its members are CLOSED on purpose. The test is about the ownership WALK —
+// children that carry no gc.root_bead_id and are reachable only over a
+// parent-child dep edge must still be collected. Since cr-ybxfw6 an OPEN member
+// defers the purge instead of being deleted with the family, so seeding open
+// children here would pin the defect rather than the walk; that shape has its
+// own tests in wisp_gc_live_member_test.go.
 func TestWispGC_PurgesParentChildOwnedDependentsWithoutMetadata(t *testing.T) {
 	now := time.Now()
 	store := newGCStore([]beads.Bead{
 		makeGCBead("mol-1", now.Add(-2*time.Hour), "closed", "molecule"),
 		{
 			ID:        "mol-1.1",
-			Status:    "open",
+			Status:    "closed",
 			Type:      "task",
 			CreatedAt: now.Add(-2 * time.Hour),
 			ParentID:  "mol-1",
 		},
 		{
 			ID:        "mol-1.2",
-			Status:    "open",
+			Status:    "closed",
 			Type:      "task",
 			CreatedAt: now.Add(-2 * time.Hour),
 		},
