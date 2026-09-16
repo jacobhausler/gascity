@@ -330,6 +330,15 @@ func doBd(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// `gc bd list` is a read-only selector. When no local scope was explicitly
+	// selected, let the existing remote read client serve it before the local
+	// bd passthrough resolves the local-only context gate. Every other bd verb,
+	// and every explicitly local --city/--rig invocation, keeps the existing
+	// path and its safety gates unchanged.
+	if code, handled := maybeRouteRemoteBdList(cityName, rigName, bdArgs, stdout, stderr); handled {
+		return code
+	}
+
 	cityPath, err := resolveBdCity(cityName)
 	if err != nil {
 		fmt.Fprintf(stderr, "gc bd: %v\n", err) //nolint:errcheck // best-effort stderr
